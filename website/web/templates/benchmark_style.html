@@ -1,0 +1,448 @@
+{% extends 'base.html' %}
+
+{% block content %}
+  <section class="section-header">
+    <span class="section-number">04</span>
+    <div class="section-text">
+      <p class="section-kicker">Style lab</p>
+      <h2 class="section-title">Benchmark Style Tracking</h2>
+      <p class="section-lede">Fit a long-only industry mix that tracks the benchmark with rolling optimization.</p>
+      <p class="section-note">The tracking portfolio is investable; alpha is diagnostic only. Long-only weights sum to 100%.</p>
+    </div>
+    <div class="section-rule"></div>
+  </section>
+
+  <section class="report-grid report-grid--spaced">
+    <div class="span-7">
+      <div class="card report-card">
+        <div class="card-body">
+          <h5 class="card-title">Configuration</h5>
+          <form method="post" class="app-form">
+            <div class="row g-3">
+            <div class="col-12 col-md-6 col-lg-4">
+              <label class="form-label" for="universe">Industry Universe</label>
+              <select class="form-select" id="universe" name="universe">
+                {% for u in universes %}
+                  <option value="{{ u }}" {% if u|string == selected_universe %}selected{% endif %}>{{ u }} Industries</option>
+                {% endfor %}
+              </select>
+              <p class="form-text">Choose the industry granularity.</p>
+            </div>
+            <div class="col-12 col-md-6 col-lg-4">
+              <label class="form-label" for="start_year">Start Year</label>
+              <input class="form-control" id="start_year" name="start_year" type="number" inputmode="numeric" pattern="\d{4}" min="{{ earliest_start_year }}" max="{{ current_year }}" step="1" placeholder="YYYY" value="{{ start_year_value }}">
+              <p class="form-text">Defaults to the earliest available data.</p>
+            </div>
+            <div class="col-12 col-md-6 col-lg-4">
+              <label class="form-label" for="style_window_years">Rolling Window (years)</label>
+              <input class="form-control" id="style_window_years" name="style_window_years" type="number" min="0.1" step="0.1" placeholder="1.0" value="{{ style_window_years_value }}">
+              <p class="form-text">Uses 252/52/12 observations per year based on data frequency.</p>
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label" for="rebalance">Rebalance Frequency</label>
+              <select class="form-select" id="rebalance" name="rebalance">
+                <option value="daily" {% if rebalance == 'daily' %}selected{% endif %}>Daily</option>
+                <option value="weekly" {% if rebalance == 'weekly' %}selected{% endif %}>Weekly</option>
+                <option value="monthly" {% if rebalance == 'monthly' %}selected{% endif %}>Monthly</option>
+                <option value="annual" {% if rebalance == 'annual' %}selected{% endif %}>Annual</option>
+              </select>
+              <p class="form-text">Annual rebalances are fastest; monthly gives smoother weight changes.</p>
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label" for="method">Solve Method</label>
+              <select class="form-select" id="method" name="method">
+                <option value="projection" {% if method == 'projection' %}selected{% endif %}>Fast projection (approx)</option>
+                <option value="qp" {% if method == 'qp' %}selected{% endif %}>Minimize tracking error (QP)</option>
+              </select>
+              <p class="form-text">Projection is fastest; QP gives a tighter tracking-error fit.</p>
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label" for="save_name">Save Run Name (optional)</label>
+              <input class="form-control" id="save_name" name="save_name" type="text" placeholder="My market portfolio estimate" value="{{ save_name_value }}">
+              <p class="form-text">Saves the full inputs + data to a local pickle.</p>
+            </div>
+            <div class="col-12 col-md-6 d-flex align-items-end">
+              <div class="form-check">
+                <input class="form-check-input" id="save_overwrite" name="save_overwrite" type="checkbox" value="1" {% if save_overwrite %}checked{% endif %}>
+                <label class="form-check-label" for="save_overwrite">Overwrite existing saved run</label>
+              </div>
+            </div>
+            <div class="col-12 d-flex flex-column flex-sm-row gap-2 align-items-start align-items-sm-center">
+              <button class="btn btn-primary" type="submit">Run style analysis</button>
+              <a class="btn btn-outline-secondary" href="{{ url_for('style.saved_benchmark_style') }}">Saved runs</a>
+              <p class="text-muted small mb-0">The simulated portfolio is long-only and sums to 100%.</p>
+            </div>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div class="span-5">
+      <div class="card report-card">
+        <div class="card-body">
+          <h5 class="card-title">Run settings</h5>
+          {% if metrics %}
+            <div class="app-form">
+              <table class="table table-sm mb-0">
+              <tbody>
+                <tr>
+                  <th scope="row">Window</th>
+                  <td>
+                    {% if metrics.inputs.window_years is not none %}
+                      {{ '%.2f' | format(metrics.inputs.window_years) }} years
+                    {% else %}
+                      —
+                    {% endif %}
+                    {% if metrics.inputs.window_frequency %}
+                      ({{ metrics.inputs.window }} obs, {{ metrics.inputs.window_frequency }})
+                    {% endif %}
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">Rebalance</th>
+                  <td>{{ metrics.inputs.rebalance }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Solve method</th>
+                  <td>
+                    {% if metrics.inputs.method == 'projection' %}
+                      Fast projection (approx)
+                    {% elif metrics.inputs.method == 'qp' %}
+                      Minimize tracking error (QP)
+                    {% else %}
+                      {{ metrics.inputs.method }}
+                    {% endif %}
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">Assets</th>
+                  <td>{{ metrics.inputs.assets }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Rebalance range</th>
+                  <td>
+                    {% if metrics.inputs.rebalance_start and metrics.inputs.rebalance_end %}
+                      {{ metrics.inputs.rebalance_start }} &rarr; {{ metrics.inputs.rebalance_end }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                </tr>
+              </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="text-muted mb-0">Run the analysis to see run settings.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="span-12">
+      <div class="card report-card">
+        <div class="card-body">
+          <h5 class="card-title">Performance Summary</h5>
+          {% if metrics %}
+            {% if metrics.sample and metrics.sample.start and metrics.sample.end %}
+              <p class="text-muted small mb-2">
+                Sample: {{ metrics.sample.start }} &rarr; {{ metrics.sample.end }}
+                {% if metrics.sample.years is not none %}
+                  ({{ '%.2f' | format(metrics.sample.years) }} yrs)
+                {% endif %}
+              </p>
+            {% endif %}
+            <table class="table table-sm mb-0">
+              <thead>
+                <tr>
+                  <th scope="col">Timeseries</th>
+                  <th scope="col">Total Return</th>
+                  <th scope="col">Annual Return</th>
+                  <th scope="col">Volatility / Tracking Error</th>
+                  <th scope="col">Sharpe / Information Ratio</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in metrics.performance %}
+                  <tr>
+                    <th scope="row">{{ row.name }}</th>
+                    <td>
+                      {% if row.total_cont_return is not none %}
+                        {{ '%.2f' | format(row.total_cont_return) }}%
+                      {% else %}
+                        —
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if row.ann_cont_return is not none %}
+                        {{ '%.2f' | format(row.ann_cont_return) }}%
+                      {% else %}
+                        —
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if row.ann_vol is not none %}
+                        {{ '%.2f' | format(row.ann_vol) }}%
+                      {% else %}
+                        —
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if row.info_ratio is not none %}
+                        {{ '%.2f' | format(row.info_ratio) }}
+                      {% elif row.sharpe is not none %}
+                        {{ '%.2f' | format(row.sharpe) }}
+                      {% else %}
+                        —
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            <p class="text-muted small mt-2 mb-0">Active volatility is tracking error.</p>
+          {% else %}
+            <p class="text-muted mb-0">Run the analysis to see performance statistics.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {% if chart_growth or chart_tracking or (weights_history and weights_history.series) %}
+    <section class="report-grid report-grid--spaced">
+      {% if chart_growth %}
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Simulated portfolio vs market benchmark</h5>
+              <p class="card-subtitle text-muted small mb-3">Simulated performance from the rolling style weights compared with the market benchmark.</p>
+              <div id="growthChart" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+      {% if chart_tracking %}
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Residual return (portfolio &minus; benchmark)</h5>
+              <p class="card-subtitle text-muted small mb-3">Residuals from the tracking fit; dashed lines show mean &plusmn; 3 SD (daily).</p>
+              <div id="trackingChart" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+      {% if weights_history and weights_history.series %}
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Historical style weights</h5>
+              <p class="card-subtitle text-muted small mb-3">Stacked area view of the rolling allocations.</p>
+              <div id="weightsHistoryChart" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  {% if weights_table %}
+    <section class="report-grid">
+      <div class="span-12">
+        <div class="card report-card">
+          <div class="card-body">
+            <p class="card-kicker">Top weights</p>
+            <h5 class="card-title">Holdings mix</h5>
+            <table class="table table-sm mb-0">
+              <tbody>
+                {% for row in weights_table %}
+                  <tr>
+                    <th scope="row">{{ row.name }}</th>
+                    <td>{{ '%.2f' | format(row.weight_pct) }}%</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  {% else %}
+    <p class="text-muted">No weights available for the requested configuration.</p>
+  {% endif %}
+
+  {% if chart_growth or chart_tracking or weights_history %}
+    <script src="https://cdn.plot.ly/plotly-2.35.0.min.js" crossorigin="anonymous"></script>
+    <script>
+      const growthChart = {{ chart_growth | tojson }};
+      const trackingChart = {{ chart_tracking | tojson }};
+      const weightsHistory = {{ weights_history | tojson }};
+
+      const baseLayout = {
+        margin: { t: 40, r: 20, b: 60, l: 60 },
+        font: {
+          family: 'Source Sans 3, Segoe UI, Tahoma, sans-serif',
+          color: '#001f38',
+        },
+        paper_bgcolor: 'rgba(0, 0, 0, 0)',
+        plot_bgcolor: '#ffffff',
+        xaxis: {
+          tickformat: "'%y",
+          automargin: true,
+          showline: true,
+          linecolor: '#d8dadb',
+          linewidth: 1,
+          gridcolor: 'rgba(216, 218, 219, 0.4)',
+          tickfont: { color: '#667d89' },
+          titlefont: { color: '#001f38' },
+          zeroline: false,
+          title: '',
+        },
+        yaxis: {
+          automargin: true,
+          showline: true,
+          linecolor: '#d8dadb',
+          linewidth: 1,
+          gridcolor: 'rgba(216, 218, 219, 0.4)',
+          tickfont: { color: '#667d89' },
+          titlefont: { color: '#001f38' },
+          zeroline: false,
+        },
+        legend: {
+          x: 0.01,
+          y: 0.99,
+          xanchor: 'left',
+          yanchor: 'top',
+          bgcolor: 'rgba(0, 0, 0, 0)',
+          border: 'None'
+        },
+        showlegend: true,
+        hovermode: 'closest',
+        hoverlabel: {
+          font: { color: '#001f38' }
+        },
+      };
+
+      if (growthChart && growthChart.series && growthChart.series.length) {
+        const traces = growthChart.series.map((series) => {
+          const isBenchmark = series.name === 'Market Benchmark';
+          return {
+            type: 'scatter',
+            mode: 'lines',
+            name: series.name,
+            x: series.x,
+            y: series.y,
+            line: {
+              color: isBenchmark ? '#2c9bac' : '#001f38',
+              width: isBenchmark ? 2.5 : 2,
+            },
+            hoverinfo: 'name+x+y',
+            hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:,.2f}<extra></extra>',
+          };
+        });
+
+        const layout = {
+          ...baseLayout,
+          yaxis: {
+            ...baseLayout.yaxis,
+            title: growthChart.y_axis_title || 'Indexed growth',
+          },
+        };
+
+        const container = document.getElementById('growthChart');
+        Plotly.purge(container);
+        Plotly.newPlot(container, traces, layout, { displaylogo: false, responsive: true });
+      }
+
+      if (trackingChart && trackingChart.series && trackingChart.series.length) {
+        const series = trackingChart.series[0];
+        const traces = [];
+
+        if (trackingChart.control_limits) {
+          const upper = trackingChart.control_limits.upper;
+          const lower = trackingChart.control_limits.lower;
+
+          traces.push(
+            {
+              type: 'scatter',
+              mode: 'lines',
+              name: '+/- 3 SD',
+              x: series.x,
+              y: series.x.map(() => upper),
+              line: { color: '#ff7a00', width: 2.4, dash: 'dash' },
+              hoverinfo: 'skip',
+              legendrank: 2,
+            },
+            {
+              type: 'scatter',
+              mode: 'lines',
+              x: series.x,
+              line: { color: '#ff7a00', width: 2.4, dash: 'dash' },
+              hoverinfo: 'skip',
+              y: series.x.map(() => lower),
+              showlegend: false,
+              legendrank: 3,
+            },
+          );
+        }
+
+        traces.push({
+          type: 'scatter',
+          mode: 'lines',
+          name: series.name,
+          x: series.x,
+          y: series.y,
+          line: { color: '#001f38', width: 1.8 },
+          hoverinfo: 'name+x+y',
+          hovertemplate: '<b>Residual return</b><br>%{x|%m/%d/%y}<br>%{y:.1f}%<extra></extra>',
+          legendrank: 1,
+        });
+
+        const layout = {
+          ...baseLayout,
+          yaxis: {
+            ...baseLayout.yaxis,
+            title: trackingChart.y_axis_title || 'Daily return',
+            tickformat: '.1f',
+            ticksuffix: '%',
+          },
+        };
+
+        const container = document.getElementById('trackingChart');
+        Plotly.purge(container);
+        Plotly.newPlot(container, traces, layout, { displaylogo: false, responsive: true });
+      }
+
+      if (weightsHistory && weightsHistory.series && weightsHistory.series.length) {
+        const traces = weightsHistory.series.map((series) => ({
+          type: 'scatter',
+          mode: 'lines',
+          name: series.name,
+          x: series.x,
+          y: series.y,
+          stackgroup: 'one',
+          line: { width: 0.7 },
+          hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:.0f}%<extra></extra>',
+          showlegend: false,
+        }));
+
+        const layout = {
+          ...baseLayout,
+          yaxis: {
+            ...baseLayout.yaxis,
+            title: weightsHistory.y_axis_title || 'Weight (%)',
+            tickformat: '.0f',
+            ticksuffix: '%',
+            range: [0, 100],
+          },
+          showlegend: false,
+        };
+
+        const container = document.getElementById('weightsHistoryChart');
+        Plotly.purge(container);
+        Plotly.newPlot(container, traces, layout, { displaylogo: false, responsive: true });
+      }
+    </script>
+  {% endif %}
+{% endblock %}

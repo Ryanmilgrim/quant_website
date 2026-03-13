@@ -1,0 +1,547 @@
+{% extends 'base.html' %}
+
+{% block content %}
+  <section class="section-header">
+    <span class="section-number">05</span>
+    <div class="section-text">
+      <p class="section-kicker">Style lab</p>
+      <h2 class="section-title">Saved Benchmark Style Runs</h2>
+      <p class="section-lede">Load prior benchmark style analyses stored locally.</p>
+      <p class="section-note">Saved runs include inputs, data, and the full tracking results.</p>
+    </div>
+    <div class="section-rule"></div>
+  </section>
+
+  <section class="report-grid report-grid--spaced">
+    <div class="{% if snapshot_meta %}span-6{% else %}span-12{% endif %}">
+      <div class="card report-card">
+        <div class="card-body">
+          <h5 class="card-title">Saved runs</h5>
+          {% if saved_runs %}
+            <form method="get" class="app-form">
+              <div class="row g-3">
+                <div class="col-12">
+                  <label class="form-label" for="run">Select saved run</label>
+                  <select class="form-select" id="run" name="run">
+                    <option value="">Choose a saved run</option>
+                    {% for run in saved_runs %}
+                      <option value="{{ run.key }}" {% if run.key == selected_key %}selected{% endif %}>
+                        {{ run.name }} ({{ run.created_at.strftime('%Y-%m-%d') }})
+                      </option>
+                    {% endfor %}
+                  </select>
+                  <p class="form-text">Saved locally under instance/analysis_results/benchmark_style.</p>
+                </div>
+                <div class="col-12 d-flex flex-column flex-sm-row gap-2">
+                  <button class="btn btn-primary" type="submit">Load saved run</button>
+                  <a class="btn btn-outline-secondary" href="{{ url_for('style.benchmark_style') }}">Run new analysis</a>
+                </div>
+              </div>
+            </form>
+            {% if not snapshot_meta %}
+              <p class="text-muted small mt-3 mb-0">Select a saved run to review its settings.</p>
+            {% endif %}
+            <div class="mt-4">
+              <h6 class="text-uppercase text-muted mb-2">Available runs</h6>
+              <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th scope="col">Name</th>
+                      <th scope="col">Saved</th>
+                      <th scope="col">Universe</th>
+                      <th scope="col">Window</th>
+                      <th scope="col">Rebalance</th>
+                      <th scope="col">Method</th>
+                      <th scope="col">Assets</th>
+                      <th scope="col">Rebalance Range</th>
+                      <th scope="col" class="text-end">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for run in saved_runs %}
+                      <tr>
+                        <th scope="row">{{ run.name }}</th>
+                        <td>{{ run.created_at.strftime('%Y-%m-%d') }}</td>
+                        <td>{{ run.universe }}</td>
+                        <td>
+                          {% if run.window_years is not none %}
+                            {{ '%.2f' | format(run.window_years) }} yrs
+                            {% if run.window_frequency %}
+                              ({{ run.window }} obs, {{ run.window_frequency }})
+                            {% endif %}
+                          {% elif run.window %}
+                            {{ run.window }} obs
+                            {% if run.window_frequency %}
+                              ({{ run.window_frequency }})
+                            {% endif %}
+                          {% else %}
+                            &mdash;
+                          {% endif %}
+                        </td>
+                        <td>
+                          {% if run.rebalance %}
+                            {{ run.rebalance }}
+                          {% else %}
+                            &mdash;
+                          {% endif %}
+                        </td>
+                        <td>
+                          {% if run.method == 'projection' %}
+                            Projection
+                          {% elif run.method == 'qp' %}
+                            QP
+                          {% else %}
+                            {% if run.method %}
+                              {{ run.method }}
+                            {% else %}
+                              &mdash;
+                            {% endif %}
+                          {% endif %}
+                        </td>
+                        <td>{{ run.assets }}</td>
+                        <td>
+                          {% if run.rebalance_start and run.rebalance_end %}
+                            {{ run.rebalance_start }} &rarr; {{ run.rebalance_end }}
+                          {% else %}
+                            &mdash;
+                          {% endif %}
+                        </td>
+                        <td class="text-end">
+                          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('style.view_saved_benchmark_style', run_key=run.key) }}">View</a>
+                          <form method="post" action="{{ url_for('style.delete_saved_benchmark_style', run_key=run.key) }}" class="d-inline">
+                            <input type="hidden" name="confirm" value="1">
+                            <button class="btn btn-sm btn-outline-danger" type="submit">Delete</button>
+                          </form>
+                        </td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          {% else %}
+            <p class="text-muted mb-0">No saved runs yet. Run a benchmark style analysis and save it.</p>
+            <a class="btn btn-outline-secondary mt-3" href="{{ url_for('style.benchmark_style') }}">Run new analysis</a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    {% if snapshot_meta %}
+      <div class="span-6">
+        <div class="card report-card">
+          <div class="card-body">
+            <h5 class="card-title">Saved run details</h5>
+            <table class="table table-sm mb-0">
+              <tbody>
+                <tr>
+                  <th scope="row">Name</th>
+                  <td>{{ snapshot_meta.name }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Saved</th>
+                  <td>{{ snapshot_meta.created_at }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Universe</th>
+                  <td>{{ snapshot_meta.universe }} Industries</td>
+                </tr>
+                <tr>
+                  <th scope="row">Weighting</th>
+                  <td>{{ snapshot_meta.weighting }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Factor Set</th>
+                  <td>{{ snapshot_meta.factor_set }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Start Date</th>
+                  <td>
+                    {% if snapshot_meta.start_date %}
+                      {{ snapshot_meta.start_date }}
+                    {% else %}
+                      &mdash;
+                    {% endif %}
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">End Date</th>
+                  <td>
+                    {% if snapshot_meta.end_date %}
+                      {{ snapshot_meta.end_date }}
+                    {% else %}
+                      &mdash;
+                    {% endif %}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    {% endif %}
+  </section>
+
+  {% if metrics %}
+    <section class="report-grid report-grid--spaced">
+      <div class="span-5">
+        <div class="card report-card">
+          <div class="card-body">
+            <h5 class="card-title">Run settings</h5>
+            <div class="app-form">
+              <table class="table table-sm mb-0">
+              <tbody>
+                <tr>
+                  <th scope="row">Window</th>
+                  <td>
+                    {% if metrics.inputs.window_years is not none %}
+                      {{ '%.2f' | format(metrics.inputs.window_years) }} years
+                    {% else %}
+                      &mdash;
+                    {% endif %}
+                    {% if metrics.inputs.window_frequency %}
+                      ({{ metrics.inputs.window }} obs, {{ metrics.inputs.window_frequency }})
+                    {% endif %}
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">Rebalance</th>
+                  <td>{{ metrics.inputs.rebalance }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Solve method</th>
+                  <td>
+                    {% if metrics.inputs.method == 'projection' %}
+                      Fast projection (approx)
+                    {% elif metrics.inputs.method == 'qp' %}
+                      Minimize tracking error (QP)
+                    {% else %}
+                      {{ metrics.inputs.method }}
+                    {% endif %}
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">Assets</th>
+                  <td>{{ metrics.inputs.assets }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Rebalance range</th>
+                  <td>
+                    {% if metrics.inputs.rebalance_start and metrics.inputs.rebalance_end %}
+                      {{ metrics.inputs.rebalance_start }} &rarr; {{ metrics.inputs.rebalance_end }}
+                    {% else %}
+                      &mdash;
+                    {% endif %}
+                  </td>
+                </tr>
+              </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="span-7">
+        <div class="card report-card">
+          <div class="card-body">
+            <h5 class="card-title">Performance Summary</h5>
+            {% if metrics.sample and metrics.sample.start and metrics.sample.end %}
+              <p class="text-muted small mb-2">
+                Sample: {{ metrics.sample.start }} &rarr; {{ metrics.sample.end }}
+                {% if metrics.sample.years is not none %}
+                  ({{ '%.2f' | format(metrics.sample.years) }} yrs)
+                {% endif %}
+              </p>
+            {% endif %}
+            <table class="table table-sm mb-0">
+              <thead>
+                <tr>
+                  <th scope="col">Timeseries</th>
+                  <th scope="col">Total Return</th>
+                  <th scope="col">Annual Return</th>
+                  <th scope="col">Volatility / Tracking Error</th>
+                  <th scope="col">Sharpe / Information Ratio</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in metrics.performance %}
+                  <tr>
+                    <th scope="row">{{ row.name }}</th>
+                    <td>
+                      {% if row.total_cont_return is not none %}
+                        {{ '%.2f' | format(row.total_cont_return) }}%
+                      {% else %}
+                        &mdash;
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if row.ann_cont_return is not none %}
+                        {{ '%.2f' | format(row.ann_cont_return) }}%
+                      {% else %}
+                        &mdash;
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if row.ann_vol is not none %}
+                        {{ '%.2f' | format(row.ann_vol) }}%
+                      {% else %}
+                        &mdash;
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if row.info_ratio is not none %}
+                        {{ '%.2f' | format(row.info_ratio) }}
+                      {% elif row.sharpe is not none %}
+                        {{ '%.2f' | format(row.sharpe) }}
+                      {% else %}
+                        &mdash;
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            <p class="text-muted small mt-2 mb-0">Active volatility is tracking error.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  {% endif %}
+
+  {% if chart_growth or chart_tracking or (weights_history and weights_history.series) %}
+    <section class="report-grid report-grid--spaced">
+      {% if chart_growth %}
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Simulated portfolio vs market benchmark</h5>
+              <p class="card-subtitle text-muted small mb-3">Simulated performance from the rolling style weights compared with the market benchmark.</p>
+              <div id="growthChart" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+      {% if chart_tracking %}
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Residual return (portfolio &minus; benchmark)</h5>
+              <p class="card-subtitle text-muted small mb-3">Residuals from the tracking fit; dashed lines show mean &plusmn; 3 SD (daily).</p>
+              <div id="trackingChart" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+      {% if weights_history and weights_history.series %}
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Historical style weights</h5>
+              <p class="card-subtitle text-muted small mb-3">Stacked area view of the rolling allocations.</p>
+              <div id="weightsHistoryChart" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  {% if weights_table %}
+    <section class="report-grid">
+      <div class="span-12">
+        <div class="card report-card">
+          <div class="card-body">
+            <p class="card-kicker">Top weights</p>
+            <h5 class="card-title">Holdings mix</h5>
+            <table class="table table-sm mb-0">
+              <tbody>
+                {% for row in weights_table %}
+                  <tr>
+                    <th scope="row">{{ row.name }}</th>
+                    <td>{{ '%.2f' | format(row.weight_pct) }}%</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  {% elif selected_key %}
+    <p class="text-muted">No weights available for the selected run.</p>
+  {% endif %}
+
+  {% if chart_growth or chart_tracking or weights_history %}
+    <script src="https://cdn.plot.ly/plotly-2.35.0.min.js" crossorigin="anonymous"></script>
+    <script>
+      const growthChart = {{ chart_growth | tojson }};
+      const trackingChart = {{ chart_tracking | tojson }};
+      const weightsHistory = {{ weights_history | tojson }};
+
+      const baseLayout = {
+        margin: { t: 40, r: 20, b: 60, l: 60 },
+        font: {
+          family: 'Source Sans 3, Segoe UI, Tahoma, sans-serif',
+          color: '#001f38',
+        },
+        paper_bgcolor: 'rgba(0, 0, 0, 0)',
+        plot_bgcolor: '#ffffff',
+        xaxis: {
+          tickformat: "'%y",
+          automargin: true,
+          showline: true,
+          linecolor: '#d8dadb',
+          linewidth: 1,
+          gridcolor: 'rgba(216, 218, 219, 0.4)',
+          tickfont: { color: '#667d89' },
+          titlefont: { color: '#001f38' },
+          zeroline: false,
+          title: '',
+        },
+        yaxis: {
+          automargin: true,
+          showline: true,
+          linecolor: '#d8dadb',
+          linewidth: 1,
+          gridcolor: 'rgba(216, 218, 219, 0.4)',
+          tickfont: { color: '#667d89' },
+          titlefont: { color: '#001f38' },
+          zeroline: false,
+        },
+        legend: {
+          x: 0.01,
+          y: 0.99,
+          xanchor: 'left',
+          yanchor: 'top',
+          bgcolor: 'rgba(0, 0, 0, 0)',
+          border: 'None'
+        },
+        showlegend: true,
+        hovermode: 'closest',
+        hoverlabel: {
+          font: { color: '#001f38' }
+        },
+      };
+
+      if (growthChart && growthChart.series && growthChart.series.length) {
+        const traces = growthChart.series.map((series) => {
+          const isBenchmark = series.name === 'Market Benchmark';
+          return {
+            type: 'scatter',
+            mode: 'lines',
+            name: series.name,
+            x: series.x,
+            y: series.y,
+            line: {
+              color: isBenchmark ? '#2c9bac' : '#001f38',
+              width: isBenchmark ? 2.5 : 2,
+            },
+            hoverinfo: 'name+x+y',
+            hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:,.2f}<extra></extra>',
+          };
+        });
+
+        const layout = {
+          ...baseLayout,
+          yaxis: {
+            ...baseLayout.yaxis,
+            title: growthChart.y_axis_title || 'Indexed growth',
+          },
+        };
+
+        const container = document.getElementById('growthChart');
+        Plotly.purge(container);
+        Plotly.newPlot(container, traces, layout, { displaylogo: false, responsive: true });
+      }
+
+      if (trackingChart && trackingChart.series && trackingChart.series.length) {
+        const series = trackingChart.series[0];
+        const traces = [];
+
+        if (trackingChart.control_limits) {
+          const upper = trackingChart.control_limits.upper;
+          const lower = trackingChart.control_limits.lower;
+
+          traces.push(
+            {
+              type: 'scatter',
+              mode: 'lines',
+              name: '+/- 3 SD',
+              x: series.x,
+              y: series.x.map(() => upper),
+              line: { color: '#ff7a00', width: 2.4, dash: 'dash' },
+              hoverinfo: 'skip',
+              legendrank: 2,
+            },
+            {
+              type: 'scatter',
+              mode: 'lines',
+              x: series.x,
+              line: { color: '#ff7a00', width: 2.4, dash: 'dash' },
+              hoverinfo: 'skip',
+              y: series.x.map(() => lower),
+              showlegend: false,
+              legendrank: 3,
+            },
+          );
+        }
+
+        traces.push({
+          type: 'scatter',
+          mode: 'lines',
+          name: series.name,
+          x: series.x,
+          y: series.y,
+          line: { color: '#001f38', width: 1.8 },
+          hoverinfo: 'name+x+y',
+          hovertemplate: '<b>Residual return</b><br>%{x|%m/%d/%y}<br>%{y:.1f}%<extra></extra>',
+          legendrank: 1,
+        });
+
+        const layout = {
+          ...baseLayout,
+          yaxis: {
+            ...baseLayout.yaxis,
+            title: trackingChart.y_axis_title || 'Daily return',
+            tickformat: '.1f',
+            ticksuffix: '%',
+          },
+        };
+
+        const container = document.getElementById('trackingChart');
+        Plotly.purge(container);
+        Plotly.newPlot(container, traces, layout, { displaylogo: false, responsive: true });
+      }
+
+      if (weightsHistory && weightsHistory.series && weightsHistory.series.length) {
+        const traces = weightsHistory.series.map((series) => ({
+          type: 'scatter',
+          mode: 'lines',
+          name: series.name,
+          x: series.x,
+          y: series.y,
+          stackgroup: 'one',
+          line: { width: 0.7 },
+          hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:.0f}%<extra></extra>',
+          showlegend: false,
+        }));
+
+        const layout = {
+          ...baseLayout,
+          yaxis: {
+            ...baseLayout.yaxis,
+            title: weightsHistory.y_axis_title || 'Weight (%)',
+            tickformat: '.0f',
+            ticksuffix: '%',
+            range: [0, 100],
+          },
+          showlegend: false,
+        };
+
+        const container = document.getElementById('weightsHistoryChart');
+        Plotly.purge(container);
+        Plotly.newPlot(container, traces, layout, { displaylogo: false, responsive: true });
+      }
+    </script>
+  {% endif %}
+{% endblock %}

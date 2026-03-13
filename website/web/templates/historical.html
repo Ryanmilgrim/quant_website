@@ -1,0 +1,145 @@
+{% extends 'base.html' %}
+
+{% block content %}
+  <section class="section-header">
+    <span class="section-number">02</span>
+    <div class="section-text">
+      <p class="section-kicker">Benchmark studio</p>
+      <h2 class="section-title">Investment Universe &ndash; Benchmark Composition</h2>
+      <p class="section-lede">Select the assets that form your investment universe. This will anchor your benchmark portfolio and downstream performance comparisons.</p>
+      <p class="section-note">The tool relies on Fama-French daily industry portfolios for long, academically vetted history. Log returns keep compounding consistent and avoid downstream math surprises. Choose the industry granularity, then view how that benchmark would have evolved over time. Benchmarks are value-weighted; switch to log growth to spot long-run compounding.</p>
+    </div>
+    <div class="section-rule"></div>
+  </section>
+
+  <form method="post" class="row gy-3 gx-3 align-items-end mb-4 app-form">
+    <div class="col-md-4">
+      <label class="form-label" for="universe">Industry Universe (benchmark building blocks)</label>
+      <select class="form-select" id="universe" name="universe">
+        {% for u in universes %}
+          <option value="{{ u }}" {% if u|string == selected_universe %}selected{% endif %}>{{ u }} Industries</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label" for="transform">Growth display</label>
+      <select class="form-select" id="transform" name="transform">
+        <option value="index" {% if transform == 'index' %}selected{% endif %}>Indexed price growth (base = 100)</option>
+        <option value="log" {% if transform == 'log' %}selected{% endif %}>Log price growth</option>
+      </select>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label" for="frequency">Data frequency</label>
+      <select class="form-select" id="frequency" name="frequency">
+        <option value="monthly" {% if frequency == 'monthly' %}selected{% endif %}>Monthly</option>
+        <option value="daily" {% if frequency == 'daily' %}selected{% endif %}>Daily</option>
+      </select>
+    </div>
+    <div class="col-12">
+      <label class="form-label" for="start_year">Start Year for benchmark window</label>
+      <input class="form-control" id="start_year" name="start_year" type="number" inputmode="numeric" pattern="\d{4}" min="{{ earliest_start_year }}" max="{{ current_year }}" step="1" placeholder="YYYY" value="{{ start_year_value }}">
+      <p class="form-text">Use YYYY format. Defaults to the earliest available Fama-French industry data.</p>
+    </div>
+    <div class="col-12 d-flex flex-column flex-sm-row gap-2 align-items-start align-items-sm-center">
+      <button class="btn btn-primary" type="submit">Refresh benchmark view</button>
+      <p class="text-muted small mb-0">Defaults show the full available history ending today for the 5-industry portfolios using log returns.</p>
+    </div>
+  </form>
+
+  {% if chart_data %}
+    <div class="card chart-panel mb-3">
+      <div class="card-body p-4 p-lg-5">
+        <h5 class="card-title">Benchmark growth from investment universe</h5>
+        <p class="card-subtitle text-muted small mb-3">Historical performance of the selected universe; this shapes the benchmark you will compare future portfolios against. Choose the frequency to view either monthly or daily series, then use the growth dropdown to switch between indexed price levels and log price growth.</p>
+        <div id="industryChart" class="chart-container"></div>
+      </div>
+    </div>
+    <script src="https://cdn.plot.ly/plotly-2.35.0.min.js" crossorigin="anonymous"></script>
+    <script>
+      const chartData = {{ chart_data | tojson }};
+      const orderedSeries = [
+        ...chartData.series.filter((series) => series.name !== 'Benchmark'),
+        ...chartData.series.filter((series) => series.name === 'Benchmark'),
+      ];
+      const traces = orderedSeries.map((series) => {
+        const isBenchmark = series.name === 'Benchmark';
+        const hoverLabel = series.name;
+
+        return {
+          type: 'scatter',
+          mode: 'lines',
+          name: series.name,
+          x: series.x,
+          y: series.y,
+          opacity: isBenchmark ? 1 : 0.3,
+          line: {
+            color: isBenchmark ? '#2c9bac' : '#001f38',
+            width: isBenchmark ? 2.5 : 1.2,
+            shape: 'linear',
+          },
+          legendgroup: isBenchmark ? 'Benchmark' : 'Industries',
+          showlegend: isBenchmark,
+          hoverinfo: 'name+x+y',
+          customdata: Array(series.y.length).fill(hoverLabel),
+          hovertemplate: '<b>%{customdata}</b><br>%{x|%m/%d/%y}<br>%{y:,.2f}<extra></extra>',
+        };
+      });
+
+      const showRangeBreaks = chartData.frequency === 'daily';
+      const layout = {
+        margin: { t: 40, r: 20, b: 60, l: 60 },
+        font: {
+          family: 'Source Sans 3, Segoe UI, Tahoma, sans-serif',
+          color: '#001f38',
+        },
+        paper_bgcolor: 'rgba(0, 0, 0, 0)',
+        plot_bgcolor: '#ffffff',
+        xaxis: {
+          tickformat: "'%y",
+          automargin: true,
+          rangebreaks: showRangeBreaks ? [{ bounds: ['sat', 'mon'] }] : [],
+          showline: true,
+          linecolor: '#d8dadb',
+          linewidth: 1,
+          gridcolor: 'rgba(216, 218, 219, 0.4)',
+          tickfont: { color: '#667d89' },
+          titlefont: { color: '#001f38' },
+          zeroline: false,
+        },
+        yaxis: {
+          title: chartData.y_axis_title || 'Benchmark index level',
+          tickformat: chartData.y_axis_title && chartData.y_axis_title.toLowerCase().includes('log') ? '.2f' : ',.0f',
+          automargin: true,
+          showline: true,
+          linecolor: '#d8dadb',
+          linewidth: 1,
+          gridcolor: 'rgba(216, 218, 219, 0.4)',
+          tickfont: { color: '#667d89' },
+          titlefont: { color: '#001f38' },
+          zeroline: false,
+        },
+        legend: {
+          orientation: 'h',
+          y: 1.08,
+          x: 1,
+          xanchor: 'right',
+          title: { text: '' },
+          font: { color: '#667d89' },
+        },
+        showlegend: true,
+        hovermode: 'closest',
+        hoverlabel: {
+          bgcolor: '#ffffff',
+          bordercolor: '#d8dadb',
+          font: { color: '#001f38' },
+        },
+      };
+
+      const chartContainer = document.getElementById('industryChart');
+      Plotly.purge(chartContainer);
+      Plotly.newPlot(chartContainer, traces, layout, { displaylogo: false, responsive: true });
+    </script>
+  {% else %}
+    <p class="text-muted">No chart data available for the selected configuration.</p>
+  {% endif %}
+{% endblock %}
