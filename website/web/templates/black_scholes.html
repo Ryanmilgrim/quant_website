@@ -1,0 +1,58 @@
+{% extends 'base.html' %}
+
+{% block content %}
+  <section class="section-header">
+    <span class="section-number">03</span>
+    <div class="section-text">
+      <p class="section-kicker">Options lab</p>
+      <h2 class="section-title">Black-Scholes Option Pricing</h2>
+      <p class="section-lede">Price European calls and puts with clear inputs and deterministic math.</p>
+    </div>
+    <div class="section-rule"></div>
+  </section>
+
+  <form method="post" class="row gy-2 gx-3 align-items-end mb-4 app-form">
+    <div class="col-md-4">
+      <label class="form-label" for="underlying_price">Underlying Price</label>
+      <input class="form-control" id="underlying_price" name="underlying_price" type="number" step="0.01" value="{{ form_values.underlying_price }}" required>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label" for="strike_price">Strike Price</label>
+      <input class="form-control" id="strike_price" name="strike_price" type="number" step="0.01" value="{{ form_values.strike_price }}" required>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label" for="time_to_expiry">Time to Expiry (years)</label>
+      <input class="form-control" id="time_to_expiry" name="time_to_expiry" type="number" step="0.01" value="{{ form_values.time_to_expiry }}" required>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label" for="risk_free_rate">Risk-Free Rate (%)</label>
+      <input class="form-control" id="risk_free_rate" name="risk_free_rate" type="number" step="0.01" value="{{ form_values.risk_free_rate }}" required>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label" for="volatility">Volatility (%)</label>
+      <input class="form-control" id="volatility" name="volatility" type="number" step="0.01" value="{{ form_values.volatility }}" required>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label" for="option_type">Option Type</label>
+      <select class="form-select" id="option_type" name="option_type">
+        <option value="call" {% if form_values.option_type == 'call' %}selected{% endif %}>Call</option>
+        <option value="put" {% if form_values.option_type == 'put' %}selected{% endif %}>Put</option>
+      </select>
+    </div>
+    <div class="col-12">
+      <button class="btn btn-primary" type="submit">Calculate</button>
+    </div>
+  </form>
+
+  {% if price is not none %}
+    <div class="result-card">
+      <div>
+        <p class="result-label">Theoretical price</p>
+        <p class="result-value">{{ '%.4f' | format(price) }}</p>
+      </div>
+      <p class="result-note">Calculated with continuous compounding and annualized inputs.</p>
+    </div>
+  {% else %}
+    <p class="text-muted">Enter parameters to calculate a theoretical option price.</p>
+  {% endif %}
+{% endblock %}
