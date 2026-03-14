@@ -641,30 +641,32 @@
             const view = returnsViewSel.value;
             if (view === 'total' && d.asset_returns) {
               traces = [
-                { type: 'scatter', mode: 'lines', name: '+2\u03c3', x: d.x, y: d.asset_upper_2s,
-                  line: { color: COL.conf, width: 0 }, showlegend: false, hoverinfo: 'skip' },
-                { type: 'scatter', mode: 'lines', name: '\u00b12\u03c3 band', x: d.x, y: d.asset_lower_2s,
-                  line: { color: COL.conf, width: 0 }, fill: 'tonexty', fillcolor: 'rgba(168, 218, 220, 0.3)',
-                  hoverinfo: 'skip' },
                 { type: 'scatter', mode: 'lines', name: 'Excess return', x: d.x, y: d.asset_returns,
                   line: { color: COL.ret, width: 0.9 },
-                  hovertemplate: '<b>Excess return</b><br>%{x|%m/%d/%y}<br>%{y:.2%}<extra></extra>' },
+                  hovertemplate: '<b>Excess return</b><br>%{x|%b %d, %Y}<br>%{y:.2%}<extra></extra>' },
               ];
-              descEl.textContent = 'Total excess returns with \u00b12\u03c3 conditional volatility bands from the full factor + GARCH model for ' + asset + '.';
+              layout.yaxis = { ...layout.yaxis, title: 'Daily return', tickformat: '.2%' };
+              descEl.textContent = 'Total excess returns for ' + asset + '.';
             } else {
+              var xFull = d.x;
               traces = [
-                { type: 'scatter', mode: 'lines', name: '+2\u03c3', x: d.x, y: d.upper_2s,
-                  line: { color: COL.conf, width: 0 }, showlegend: false, hoverinfo: 'skip' },
-                { type: 'scatter', mode: 'lines', name: '\u00b12\u03c3 band', x: d.x, y: d.lower_2s,
-                  line: { color: COL.conf, width: 0 }, fill: 'tonexty', fillcolor: 'rgba(168, 218, 220, 0.3)',
-                  hoverinfo: 'skip' },
-                { type: 'scatter', mode: 'lines', name: 'Residual', x: d.x, y: d.returns,
+                { type: 'scatter', mode: 'lines', name: 'Std. residual', x: xFull, y: d.std_resid,
                   line: { color: COL.ret, width: 0.9 },
-                  hovertemplate: '<b>Residual</b><br>%{x|%m/%d/%y}<br>%{y:.2%}<extra></extra>' },
+                  hovertemplate: '<b>Std. residual</b><br>%{x|%b %d, %Y}<br>%{y:.2f}\u03c3<extra></extra>' },
+                { type: 'scatter', mode: 'lines', name: '+2\u03c3', x: [xFull[0], xFull[xFull.length-1]], y: [2, 2],
+                  line: { color: COL.forecast, width: 1.2, dash: 'dash' }, hoverinfo: 'skip' },
+                { type: 'scatter', mode: 'lines', name: '\u22122\u03c3', x: [xFull[0], xFull[xFull.length-1]], y: [-2, -2],
+                  line: { color: COL.forecast, width: 1.2, dash: 'dash' }, hoverinfo: 'skip' },
+                { type: 'scatter', mode: 'lines', name: '+3\u03c3', x: [xFull[0], xFull[xFull.length-1]], y: [3, 3],
+                  line: { color: COL.identity, width: 1, dash: 'dot' }, hoverinfo: 'skip' },
+                { type: 'scatter', mode: 'lines', name: '\u22123\u03c3', x: [xFull[0], xFull[xFull.length-1]], y: [-3, -3],
+                  line: { color: COL.identity, width: 1, dash: 'dot' }, hoverinfo: 'skip' },
               ];
-              descEl.textContent = 'Residuals (excess return minus factor contribution) with \u00b12\u03c3 GARCH bands for ' + asset + '. Residuals should resemble white noise if the model captures volatility clustering.';
+              layout.yaxis = { ...layout.yaxis, title: 'Standard deviations (\u03c3)' };
+              descEl.textContent = 'Standardized residuals (\u03b5/\u03c3) for ' + asset
+                + '. Within \u00b12\u03c3: ' + d.pct_in_2s + '% (normal: 95.4%)'
+                + '. Within \u00b13\u03c3: ' + d.pct_in_3s + '% (normal: 99.7%).';
             }
-            layout.yaxis = { ...layout.yaxis, title: 'Daily return', tickformat: '.2%' };
           }
 
           Plotly.react(el, traces, layout, plotCfg);

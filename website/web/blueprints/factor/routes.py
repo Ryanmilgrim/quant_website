@@ -317,8 +317,6 @@ def _summarize_factor_run(run: FactorRun) -> dict:
         real_avg = ts.get("real_avg_vol_ann", pd.Series(dtype=float))
         if not pred_avg.empty and not real_avg.empty:
             idx = pred_avg.index.intersection(real_avg.index)
-            step = _thin(len(idx))
-            idx = idx[::step]
             dates = _dates_to_strings(idx)
             agg_vol_backtest = {
                 "series": [
@@ -337,8 +335,6 @@ def _summarize_factor_run(run: FactorRun) -> dict:
             pred_vol_ann = annualize_vol(pred_vol)
             real_vol_ann = annualize_vol(real_vol)
             vol_idx = pred_vol_ann.index.intersection(real_vol_ann.index)
-            step = _thin(len(vol_idx))
-            vol_idx = vol_idx[::step]
             vol_dates = _dates_to_strings(vol_idx)
             pa_vol_data = {}
             for asset in assets:
@@ -353,7 +349,7 @@ def _summarize_factor_run(run: FactorRun) -> dict:
                 "data": pa_vol_data,
             }
 
-        # Per-asset confidence bands (residual + total returns)
+        # Per-asset standardized residuals
         resid = run.results.get("resid", pd.DataFrame())
         resid_cond_var_ev = run.results.get("resid_cond_var", pd.DataFrame())
         assets_excess_df = run.results.get("assets_excess")
@@ -364,29 +360,28 @@ def _summarize_factor_run(run: FactorRun) -> dict:
                 r = resid[asset].astype(float)
                 s = np.sqrt(resid_cond_var_ev[asset].astype(float).clip(lower=0.0))
                 cidx = r.index.intersection(s.index)
-                step = _thin(len(cidx), max_points=8000)
-                cidx = cidx[::step]
                 r = r.loc[cidx]
                 s = s.loc[cidx]
+                # Standardized residual: r / sigma
+                std_resid = (r / s.replace(0.0, np.nan)).fillna(0.0)
                 cdates = _dates_to_strings(cidx)
+                # Compute % within ±2σ and ±3σ
+                n_obs = len(std_resid)
+                pct_in_2s = float((std_resid.abs() <= 2.0).sum() / n_obs) if n_obs else 0.0
+                pct_in_3s = float((std_resid.abs() <= 3.0).sum() / n_obs) if n_obs else 0.0
                 entry: dict = {
                     "x": cdates,
-                    "returns": _safe_list(r.round(6)),
-                    "upper_2s": _safe_list((2.0 * s).round(6)),
-                    "lower_2s": _safe_list((-2.0 * s).round(6)),
+                    "std_resid": _safe_list(std_resid.round(4)),
+                    "pct_in_2s": round(pct_in_2s * 100, 1),
+                    "pct_in_3s": round(pct_in_3s * 100, 1),
                 }
-                # Total excess returns + total vol bands (if available)
+                # Total excess returns (raw, for the total returns view)
                 if (
                     assets_excess_df is not None
                     and asset in assets_excess_df.columns
-                    and asset_cond_vol_df is not None
-                    and asset in asset_cond_vol_df.columns
                 ):
                     ar = assets_excess_df[asset].astype(float).reindex(cidx)
-                    av = asset_cond_vol_df[asset].astype(float).reindex(cidx).clip(lower=0.0)
                     entry["asset_returns"] = _safe_list(ar.round(6))
-                    entry["asset_upper_2s"] = _safe_list((2.0 * av).round(6))
-                    entry["asset_lower_2s"] = _safe_list((-2.0 * av).round(6))
                 pa_conf_data[asset] = entry
             per_asset_conf = {
                 "assets": assets,
@@ -399,8 +394,6 @@ def _summarize_factor_run(run: FactorRun) -> dict:
         if not pred_corr_agg.empty and not real_corr_agg.empty:
             assets = [str(c) for c in pred_corr_agg.columns]
             corr_idx = pred_corr_agg.index.intersection(real_corr_agg.index)
-            step = _thin(len(corr_idx))
-            corr_idx = corr_idx[::step]
             corr_dates = _dates_to_strings(corr_idx)
             pa_corr_data = {}
             for asset in assets:
@@ -423,8 +416,6 @@ def _summarize_factor_run(run: FactorRun) -> dict:
             # Use dates from one arbitrary pair to build the shared index
             sample_key = next(iter(pred_pw))
             pw_idx = pred_pw[sample_key].index
-            step = _thin(len(pw_idx))
-            pw_idx = pw_idx[::step]
             pw_dates = _dates_to_strings(pw_idx)
             for key in pred_pw:
                 if key not in real_pw:
