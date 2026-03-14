@@ -21,7 +21,7 @@ from toolkit.analysis.factor_storage import (
     save_factor_snapshot,
 )
 from toolkit.analysis.style_storage import snapshot_path
-from website.lib.data import SUPPORTED_INDUSTRY_UNIVERSES
+from website.lib.data import SUPPORTED_FACTOR_SETS, SUPPORTED_INDUSTRY_UNIVERSES
 from website.web.services.universe_cache import (
     get_universe_returns_cached,
     get_universe_start_date_cached,
@@ -110,18 +110,88 @@ def _summarize_factor_run(run: FactorRun) -> dict:
     # --- Meta ---
     meta_payload = {k: _safe_meta_value(v) for k, v in meta.items()}
 
-    # --- Evaluation summary ---
-    eval_summary = {}
+    # --- Per-asset metrics table ---
+    asset_metrics = []
+    r2_series = run.results.get("r2", pd.Series(dtype=float))
+    asset_cond_vol_df = run.results.get("asset_cond_vol")
+    resid_cond_var_df = run.results.get("resid_cond_var")
+    assets_excess_full = run.results.get("assets_excess")
+    resid_full = run.results.get("resid", pd.DataFrame())
+    alpha_intercept = run.results.get("alpha_intercept", pd.Series(dtype=float))
+    if r2_series is not None and not r2_series.empty:
+        for asset in r2_series.index:
+            row = {"asset": str(asset), "r2": _safe_float(r2_series.loc[asset])}
+            # Total vol (annualized)
+            total_var_daily = None
+            if asset_cond_vol_df is not None and asset in asset_cond_vol_df.columns:
+                last_vol = float(asset_cond_vol_df[asset].iloc[-1])
+                total_var_daily = last_vol ** 2
+                row["total_vol_ann"] = _safe_float(last_vol * float(np.sqrt(252)))
+            else:
+                row["total_vol_ann"] = None
+            # Residual vol (annualized)
+            resid_var_daily = None
+            if resid_cond_var_df is not None and asset in resid_cond_var_df.columns:
+                resid_var_daily = float(resid_cond_var_df[asset].iloc[-1])
+                row["resid_vol_ann"] = _safe_float(
+                    float(np.sqrt(max(resid_var_daily, 0.0))) * float(np.sqrt(252))
+                )
+            else:
+                row["resid_vol_ann"] = None
+            # Systematic vol and factor risk fraction
+            if total_var_daily is not None and resid_var_daily is not None:
+                sys_var = max(total_var_daily - resid_var_daily, 0.0)
+                row["systematic_vol_ann"] = _safe_float(float(np.sqrt(sys_var * 252)))
+                row["factor_risk_pct"] = _safe_float(
+                    sys_var / total_var_daily if total_var_daily > 0 else 0.0
+                )
+            else:
+                row["systematic_vol_ann"] = None
+                row["factor_risk_pct"] = None
+            # Annualized returns (log returns: annual ~ daily_mean * 252)
+            if assets_excess_full is not None and asset in assets_excess_full.columns:
+                row["total_return_ann"] = _safe_float(
+                    float(assets_excess_full[asset].mean()) * 252
+                )
+            else:
+                row["total_return_ann"] = None
+            if (
+                assets_excess_full is not None
+                and asset in assets_excess_full.columns
+                and not resid_full.empty
+                and asset in resid_full.columns
+            ):
+                sys_ret = assets_excess_full[asset] - resid_full[asset]
+                row["systematic_return_ann"] = _safe_float(float(sys_ret.mean()) * 252)
+                row["residual_return_ann"] = _safe_float(
+                    float(resid_full[asset].mean()) * 252
+                )
+            else:
+                row["systematic_return_ann"] = None
+                row["residual_return_ann"] = None
+            # Jensen's alpha (annualized)
+            if (
+                alpha_intercept is not None
+                and not alpha_intercept.empty
+                and asset in alpha_intercept.index
+            ):
+                row["alpha_ann"] = _safe_float(
+                    float(alpha_intercept.loc[asset]) * 252
+                )
+            else:
+                row["alpha_ann"] = None
+            # Residual Sharpe ratio
+            if row.get("residual_return_ann") is not None and row.get("resid_vol_ann"):
+                row["residual_sharpe"] = _safe_float(
+                    row["residual_return_ann"] / row["resid_vol_ann"]
+                )
+            else:
+                row["residual_sharpe"] = None
+            asset_metrics.append(row)
+
+    # --- Train end ---
     train_end = None
     if isinstance(ev, dict):
-        eval_summary = ev.get("summary", {})
-        # Serialize nested dicts (each value is a dict with mean/std/min/max)
-        eval_summary = {
-            k: {sk: _safe_float(sv) for sk, sv in v.items()}
-            if isinstance(v, dict)
-            else _safe_float(v)
-            for k, v in eval_summary.items()
-        }
         train_end = ev.get("params", {}).get("train_end")
 
     train_end_str = (
@@ -144,6 +214,7 @@ def _summarize_factor_run(run: FactorRun) -> dict:
     # --- Factor correlation heatmap ---
     factor_cov = run.results.get("factor_cov_forecast")
     factor_corr_heatmap = None
+    factor_cov_heatmap = None
     if factor_cov is not None:
         corr = covariance_to_correlation_df(factor_cov, clip=True)
         factor_corr_heatmap = {
@@ -153,13 +224,90 @@ def _summarize_factor_run(run: FactorRun) -> dict:
             "zmin": -1,
             "zmax": 1,
         }
+        # Annualized factor covariance heatmap (daily cov * 252)
+        cov_ann = factor_cov.to_numpy(dtype=float) * 252
+        factor_cov_heatmap = {
+            "z": _safe_nested_list(np.round(cov_ann, 6)),
+            "x": [str(c) for c in factor_cov.columns],
+            "y": [str(r) for r in factor_cov.index],
+        }
+
+    # --- Factor volatility timeseries ---
+    factor_vol_ts = None
+    pc_cond_var = run.results.get("pc_cond_var")
+    eigen_vectors = run.results.get("eigen_vectors")
+    if pc_cond_var is not None and eigen_vectors is not None:
+        ev_mat = eigen_vectors.to_numpy(dtype=float)
+        fv_idx = pc_cond_var.index
+        step = _thin(len(fv_idx))
+        fv_thinned = fv_idx[::step]
+        fv_dates = _dates_to_strings(fv_thinned)
+        factor_names = [str(f) for f in eigen_vectors.index]
+
+        # Vectorized: diag(V @ diag(h) @ V') = V^2 @ h
+        V_sq = ev_mat ** 2
+        h_pc_arr = pc_cond_var.loc[fv_thinned].to_numpy(dtype=float)
+        factor_var = h_pc_arr @ V_sq.T
+        factor_vol = np.sqrt(np.clip(factor_var, 0, None)) * float(np.sqrt(252))
+
+        fv_vol_data = {}
+        for i, fname in enumerate(factor_names):
+            fv_vol_data[fname] = _safe_list(np.round(factor_vol[:, i], 6))
+
+        # Factor-to-factor correlation + covariance timeseries
+        fv_corr_data: dict[str, dict[str, list]] = {}
+        fv_cov_data: dict[str, list] = {}
+        n_f = len(factor_names)
+        # Initialize cov_data keys: upper triangle + diagonal
+        for fi in range(n_f):
+            fv_cov_data[f"Var({factor_names[fi]})"] = []
+            for fj in range(fi + 1, n_f):
+                fv_cov_data[f"Cov({factor_names[fi]}, {factor_names[fj]})"] = []
+        for t_i in range(len(fv_thinned)):
+            h_pc_t = np.clip(h_pc_arr[t_i], 0.0, None)
+            Sf = ev_mat @ np.diag(h_pc_t) @ ev_mat.T
+            Sf = 0.5 * (Sf + Sf.T)
+            d = np.sqrt(np.clip(np.diag(Sf), 1e-30, None))
+            corr_mat = Sf / np.outer(d, d)
+            np.clip(corr_mat, -1.0, 1.0, out=corr_mat)
+            for fi in range(n_f):
+                fname = factor_names[fi]
+                if fname not in fv_corr_data:
+                    fv_corr_data[fname] = {
+                        factor_names[fj]: [] for fj in range(n_f) if fj != fi
+                    }
+                for fj in range(n_f):
+                    if fi == fj:
+                        continue
+                    fv_corr_data[fname][factor_names[fj]].append(
+                        round(float(corr_mat[fi, fj]), 6)
+                    )
+            # Annualized covariance: upper triangle + diagonal
+            Sf_ann = Sf * 252
+            for fi in range(n_f):
+                fv_cov_data[f"Var({factor_names[fi]})"].append(
+                    round(float(Sf_ann[fi, fi]), 8)
+                )
+                for fj in range(fi + 1, n_f):
+                    fv_cov_data[f"Cov({factor_names[fi]}, {factor_names[fj]})"].append(
+                        round(float(Sf_ann[fi, fj]), 8)
+                    )
+
+        factor_vol_ts = {
+            "factors": factor_names,
+            "x": fv_dates,
+            "vol_data": fv_vol_data,
+            "corr_data": fv_corr_data,
+            "cov_data": fv_cov_data,
+            "train_end": train_end_str,
+        }
 
     # --- Evaluation timeseries-based charts ---
     agg_vol_backtest = None
-    vol_regression_scatter = None
     per_asset_vol = None
     per_asset_conf = None
     per_asset_corr = None
+    pairwise_corr = None
 
     if isinstance(ev, dict):
         ts = ev.get("timeseries", {})
@@ -181,45 +329,10 @@ def _summarize_factor_run(run: FactorRun) -> dict:
                 "train_end": train_end_str,
             }
 
-        # Vol regression scatter
+        # Per-asset vol backtest
         pred_vol = ts.get("pred_vol", pd.DataFrame())
         real_vol = ts.get("real_vol", pd.DataFrame())
         if not pred_vol.empty and not real_vol.empty:
-            idx = pred_vol.index.intersection(real_vol.index)
-            if train_end is not None:
-                idx = idx[idx >= pd.Timestamp(train_end)]
-            pv_ann = annualize_vol(pred_vol.loc[idx])
-            rv_ann = annualize_vol(real_vol.loc[idx])
-            x_vals = rv_ann.mean(axis=0)
-            y_vals = pv_ann.mean(axis=0)
-            scatter_df = pd.concat(
-                [x_vals.rename("real"), y_vals.rename("pred")], axis=1
-            ).dropna()
-
-            if not scatter_df.empty:
-                xv = scatter_df["real"].to_numpy(dtype=float)
-                yv = scatter_df["pred"].to_numpy(dtype=float)
-                b, a = np.polyfit(xv, yv, deg=1)
-                y_hat = a + b * xv
-                ss_res = float(np.sum((yv - y_hat) ** 2))
-                ss_tot = float(np.sum((yv - float(np.mean(yv))) ** 2))
-                r2 = 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
-                lo = float(np.nanmin(np.r_[xv, yv]))
-                hi = float(np.nanmax(np.r_[xv, yv]))
-
-                vol_regression_scatter = {
-                    "x": _safe_list(xv.round(6)),
-                    "y": _safe_list(yv.round(6)),
-                    "labels": [str(n) for n in scatter_df.index],
-                    "regression": {
-                        "a": _safe_float(a),
-                        "b": _safe_float(b),
-                        "r2": _safe_float(r2),
-                    },
-                    "identity_line": {"lo": _safe_float(lo), "hi": _safe_float(hi)},
-                }
-
-            # Per-asset vol backtest
             assets = [str(c) for c in pred_vol.columns]
             pred_vol_ann = annualize_vol(pred_vol)
             real_vol_ann = annualize_vol(real_vol)
@@ -240,40 +353,52 @@ def _summarize_factor_run(run: FactorRun) -> dict:
                 "data": pa_vol_data,
             }
 
-        # Per-asset confidence bands
+        # Per-asset confidence bands (residual + total returns)
         resid = run.results.get("resid", pd.DataFrame())
-        resid_cond_var = run.results.get("resid_cond_var", pd.DataFrame())
-        if not resid.empty and not resid_cond_var.empty:
+        resid_cond_var_ev = run.results.get("resid_cond_var", pd.DataFrame())
+        assets_excess_df = run.results.get("assets_excess")
+        if not resid.empty and not resid_cond_var_ev.empty:
             assets = [str(c) for c in resid.columns]
             pa_conf_data = {}
             for asset in assets:
                 r = resid[asset].astype(float)
-                s = np.sqrt(resid_cond_var[asset].astype(float).clip(lower=0.0))
+                s = np.sqrt(resid_cond_var_ev[asset].astype(float).clip(lower=0.0))
                 cidx = r.index.intersection(s.index)
-                step = _thin(len(cidx))
+                step = _thin(len(cidx), max_points=8000)
                 cidx = cidx[::step]
                 r = r.loc[cidx]
                 s = s.loc[cidx]
                 cdates = _dates_to_strings(cidx)
-                pa_conf_data[asset] = {
+                entry: dict = {
                     "x": cdates,
                     "returns": _safe_list(r.round(6)),
                     "upper_2s": _safe_list((2.0 * s).round(6)),
                     "lower_2s": _safe_list((-2.0 * s).round(6)),
-                    "upper_3s": _safe_list((3.0 * s).round(6)),
-                    "lower_3s": _safe_list((-3.0 * s).round(6)),
                 }
+                # Total excess returns + total vol bands (if available)
+                if (
+                    assets_excess_df is not None
+                    and asset in assets_excess_df.columns
+                    and asset_cond_vol_df is not None
+                    and asset in asset_cond_vol_df.columns
+                ):
+                    ar = assets_excess_df[asset].astype(float).reindex(cidx)
+                    av = asset_cond_vol_df[asset].astype(float).reindex(cidx).clip(lower=0.0)
+                    entry["asset_returns"] = _safe_list(ar.round(6))
+                    entry["asset_upper_2s"] = _safe_list((2.0 * av).round(6))
+                    entry["asset_lower_2s"] = _safe_list((-2.0 * av).round(6))
+                pa_conf_data[asset] = entry
             per_asset_conf = {
                 "assets": assets,
                 "data": pa_conf_data,
             }
 
-        # Per-asset correlation backtest
-        pred_corr = ts.get("pred_corr_to_agg", pd.DataFrame())
-        real_corr = ts.get("real_corr_to_agg", pd.DataFrame())
-        if not pred_corr.empty and not real_corr.empty:
-            assets = [str(c) for c in pred_corr.columns]
-            corr_idx = pred_corr.index.intersection(real_corr.index)
+        # Per-asset correlation backtest (vs aggregate)
+        pred_corr_agg = ts.get("pred_corr_to_agg", pd.DataFrame())
+        real_corr_agg = ts.get("real_corr_to_agg", pd.DataFrame())
+        if not pred_corr_agg.empty and not real_corr_agg.empty:
+            assets = [str(c) for c in pred_corr_agg.columns]
+            corr_idx = pred_corr_agg.index.intersection(real_corr_agg.index)
             step = _thin(len(corr_idx))
             corr_idx = corr_idx[::step]
             corr_dates = _dates_to_strings(corr_idx)
@@ -281,8 +406,8 @@ def _summarize_factor_run(run: FactorRun) -> dict:
             for asset in assets:
                 pa_corr_data[asset] = {
                     "x": corr_dates,
-                    "pred": _safe_list(pred_corr.loc[corr_idx, asset].round(6)),
-                    "real": _safe_list(real_corr.loc[corr_idx, asset].round(6)),
+                    "pred": _safe_list(pred_corr_agg.loc[corr_idx, asset].round(6)),
+                    "real": _safe_list(real_corr_agg.loc[corr_idx, asset].round(6)),
                 }
             per_asset_corr = {
                 "assets": assets,
@@ -290,17 +415,43 @@ def _summarize_factor_run(run: FactorRun) -> dict:
                 "data": pa_corr_data,
             }
 
+        # Pairwise correlation backtest
+        pred_pw = ts.get("pred_corr_pairwise", {})
+        real_pw = ts.get("real_corr_pairwise", {})
+        if pred_pw and real_pw:
+            pw_pairs = {}
+            # Use dates from one arbitrary pair to build the shared index
+            sample_key = next(iter(pred_pw))
+            pw_idx = pred_pw[sample_key].index
+            step = _thin(len(pw_idx))
+            pw_idx = pw_idx[::step]
+            pw_dates = _dates_to_strings(pw_idx)
+            for key in pred_pw:
+                if key not in real_pw:
+                    continue
+                pw_pairs[key] = {
+                    "x": pw_dates,
+                    "pred": _safe_list(pred_pw[key].loc[pw_idx].round(6)),
+                    "real": _safe_list(real_pw[key].loc[pw_idx].round(6)),
+                }
+            pairwise_corr = {
+                "pairs": pw_pairs,
+                "train_end": train_end_str,
+            }
+
     return {
         "meta": meta_payload,
-        "eval_summary": eval_summary,
+        "asset_metrics": asset_metrics,
         "train_end": train_end_str,
         "beta_heatmap": beta_heatmap,
         "factor_corr_heatmap": factor_corr_heatmap,
+        "factor_cov_heatmap": factor_cov_heatmap,
+        "factor_vol_ts": factor_vol_ts,
         "agg_vol_backtest": agg_vol_backtest,
-        "vol_regression_scatter": vol_regression_scatter,
         "per_asset_vol": per_asset_vol,
         "per_asset_conf": per_asset_conf,
         "per_asset_corr": per_asset_corr,
+        "pairwise_corr": pairwise_corr,
     }
 
 
@@ -316,17 +467,35 @@ def factor_analysis():
     selected_universe = (params.get("universe") or "10").strip()
     start_year_value = (params.get("start_year") or "").strip()
     garch_dist = (params.get("garch_dist") or "t").strip()
-    pca_demean = bool(params.get("pca_demean"))
+    factor_set = (params.get("factor_set") or "ff3").strip()
     train_fraction_value = (params.get("train_fraction") or "0.7").strip()
     realized_window_value = (params.get("realized_window") or "60").strip()
     save_name_value = (params.get("save_name") or "").strip()
     save_overwrite = bool(params.get("save_overwrite"))
 
     weighting = "value"
-    factor_set = "ff3"
     current_year = date.today().year
     earliest_start_year: Optional[int] = None
     start_year_display: Optional[str] = start_year_value
+
+    # --- Auto-load default saved run on GET ---
+    if request.method == "GET" and results is None:
+        try:
+            results_dir = _factor_results_dir()
+            default_path = snapshot_path(results_dir, "Alpha_Example")
+            if default_path.exists():
+                snap = load_factor_snapshot(default_path)
+                results = _summarize_factor_run(snap.run)
+                selected_universe = str(snap.universe)
+                garch_dist = snap.garch_dist or garch_dist
+                factor_set = snap.factor_set or factor_set
+                train_fraction_value = str(snap.train_fraction)
+                realized_window_value = str(snap.realized_window)
+                if snap.start_date:
+                    start_year_value = str(snap.start_date.year)
+                    start_year_display = start_year_value
+        except Exception:
+            pass  # silently fall back to empty form
 
     try:
         universe = int(selected_universe)
@@ -335,6 +504,9 @@ def factor_analysis():
 
         if garch_dist not in {"normal", "t", "skewt"}:
             raise ValueError("Unsupported GARCH distribution")
+
+        if factor_set not in SUPPORTED_FACTOR_SETS:
+            raise ValueError("Unsupported factor set")
 
         train_fraction = float(train_fraction_value)
         if not (0.1 <= train_fraction <= 0.9):
@@ -375,7 +547,7 @@ def factor_analysis():
                 fm = FactorModel(
                     rf_name="Rf",
                     garch_dist=garch_dist,
-                    pca_demean=pca_demean,
+                    pca_demean=False,
                 )
                 run = fm.evaluate_train_test(
                     uni=df,
@@ -396,7 +568,7 @@ def factor_analysis():
                             start_date=start_date,
                             end_date=None,
                             garch_dist=garch_dist,
-                            pca_demean=pca_demean,
+                            pca_demean=False,
                             train_fraction=train_fraction,
                             realized_window=realized_window,
                             run=run,
@@ -429,7 +601,7 @@ def factor_analysis():
         selected_universe=selected_universe,
         start_year_value=start_year_display,
         garch_dist=garch_dist,
-        pca_demean=pca_demean,
+        factor_set=factor_set,
         train_fraction_value=train_fraction_value,
         realized_window_value=realized_window_value,
         save_name_value=save_name_value,
@@ -500,7 +672,7 @@ def view_saved_factor_analysis(run_key: str):
         "universe": snapshot.universe,
         "start_year": snapshot.start_date.year if snapshot.start_date else None,
         "garch_dist": snapshot.garch_dist,
-        "pca_demean": "1" if snapshot.pca_demean else None,
+        "factor_set": snapshot.factor_set,
         "train_fraction": snapshot.train_fraction,
         "realized_window": snapshot.realized_window,
     }

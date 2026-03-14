@@ -23,6 +23,33 @@
   --font-serif: "Merriweather", "Georgia", serif;
 }
 
+/* ================================================================
+   THEME GUIDE — BNY Advisors-inspired financial look
+   ================================================================
+   Primary palette:
+     Navy (ink-900 #00233c / ink-800 #001f38) — headers, text, dark accents
+     Teal (#2c9bac / #45999a / #6abcc5)       — interactive, accents, links
+     Support (#285064)                          — secondary text
+     Accent (#f86018)                           — sparingly, call to action
+
+   Neutrals:
+     Paper (#ffffff), Surface (#eaeaea / #f4f4f5), Border (#d8dadb), Muted (#667d89)
+
+   Typography:
+     Headings: Oswald (uppercase, letter-spacing 0.08em)
+     Body:     Source Sans 3
+     Accent:   Merriweather (serif, callouts)
+
+   Charts (Plotly):
+     Forecast/Predicted: #e63946 (red)
+     Realized/Trailing:  #457b9d (slate blue)
+     Heatmap colorscale:
+       [0] #001f38 navy → [0.25] #285064 → [0.5] #ffffff → [0.75] #6abcc5 → [1] #2c9bac teal
+     Background: transparent paper, white plot area
+     Font: Source Sans 3, color #001f38
+     Grid: rgba(216, 218, 219, 0.4)
+   ================================================================ */
+
 *,
 *::before,
 *::after {
@@ -555,5 +582,115 @@ a:hover {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* ---- Model description ---- */
+.model-description {
+  font-family: var(--font-body);
+  line-height: 1.8;
+  color: var(--support);
+}
+
+.model-description h6 {
+  font-family: var(--font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-900);
+  margin-top: 1.2rem;
+}
+
+.math-block {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 1rem 1.5rem;
+  margin: 0.8rem 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+/* ---- Per-asset metrics table ---- */
+.metrics-table {
+  font-variant-numeric: tabular-nums;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.metrics-table th,
+.metrics-table td {
+  padding: 0.45rem 0.75rem;
+}
+
+.metrics-table thead th {
+  font-family: var(--font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.8rem;
+  color: var(--muted);
+  border-bottom: 2px solid var(--border);
+}
+
+.metrics-table tbody th {
+  font-weight: 600;
+  color: var(--ink-900);
+}
+
+.metrics-table tbody td {
+  color: var(--support);
+}
+
+/* ---- Backtesting control bar ---- */
+.backtest-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1.2rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: 1rem;
+}
+
+.backtest-control-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.backtest-label {
+  font-family: var(--font-heading);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--muted);
+  white-space: nowrap;
+  margin: 0;
+}
+
+.backtest-controls select {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: #ffffff;
+  color: var(--ink-900);
+  font-size: 0.85rem;
+  padding: 0.3rem 0.6rem;
+}
+
+.backtest-controls select:focus {
+  border-color: var(--teal-500);
+  box-shadow: 0 0 0 0.2rem rgba(44, 155, 172, 0.2);
+  outline: none;
+}
+
+@media (max-width: 576px) {
+  .backtest-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .backtest-control-group {
+    justify-content: space-between;
   }
 }
