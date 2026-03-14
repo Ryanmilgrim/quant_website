@@ -1,0 +1,594 @@
+{% extends 'base.html' %}
+
+{% block content %}
+  <section class="section-header">
+    <span class="section-number">06</span>
+    <div class="section-text">
+      <p class="section-kicker">Risk lab</p>
+      <h2 class="section-title">Factor Risk Model</h2>
+      <p class="section-lede">Estimate a PCA-based covariance model with GARCH conditional variance and backtest it out of sample.</p>
+      <p class="section-note">LassoCV selects factor exposures, PCA rotates into principal components, and GARCH(1,1) forecasts time-varying variance.</p>
+    </div>
+    <div class="section-rule"></div>
+  </section>
+
+  <section class="report-grid report-grid--spaced">
+    <div class="span-7">
+      <div class="card report-card">
+        <div class="card-body">
+          <h5 class="card-title">Configuration</h5>
+          <form method="post" class="app-form">
+            <div class="row g-3">
+            <div class="col-12 col-md-6 col-lg-4">
+              <label class="form-label" for="universe">Industry Universe</label>
+              <select class="form-select" id="universe" name="universe">
+                {% for u in universes %}
+                  <option value="{{ u }}" {% if u|string == selected_universe %}selected{% endif %}>{{ u }} Industries</option>
+                {% endfor %}
+              </select>
+              <p class="form-text">Choose the industry granularity.</p>
+            </div>
+            <div class="col-12 col-md-6 col-lg-4">
+              <label class="form-label" for="start_year">Start Year</label>
+              <input class="form-control" id="start_year" name="start_year" type="number" inputmode="numeric" pattern="\d{4}" min="{{ earliest_start_year }}" max="{{ current_year }}" step="1" placeholder="YYYY" value="{{ start_year_value }}">
+              <p class="form-text">Defaults to the earliest available data.</p>
+            </div>
+            <div class="col-12 col-md-6 col-lg-4">
+              <label class="form-label" for="garch_dist">GARCH Distribution</label>
+              <select class="form-select" id="garch_dist" name="garch_dist">
+                <option value="normal" {% if garch_dist == 'normal' %}selected{% endif %}>Normal</option>
+                <option value="t" {% if garch_dist == 't' %}selected{% endif %}>Student-t</option>
+                <option value="skewt" {% if garch_dist == 'skewt' %}selected{% endif %}>Skewed-t</option>
+              </select>
+              <p class="form-text">Innovation distribution for GARCH(1,1).</p>
+            </div>
+            <div class="col-12 col-md-6 col-lg-4">
+              <label class="form-label" for="train_fraction">Train Fraction</label>
+              <input class="form-control" id="train_fraction" name="train_fraction" type="number" min="0.1" max="0.9" step="0.05" value="{{ train_fraction_value }}">
+              <p class="form-text">Proportion of data used for in-sample training.</p>
+            </div>
+            <div class="col-12 col-md-6 col-lg-4">
+              <label class="form-label" for="realized_window">Realized Window</label>
+              <input class="form-control" id="realized_window" name="realized_window" type="number" min="5" max="252" step="1" value="{{ realized_window_value }}">
+              <p class="form-text">Rolling window for trailing realized vol benchmark.</p>
+            </div>
+            <div class="col-12 col-md-6 col-lg-4 d-flex align-items-end">
+              <div class="form-check">
+                <input class="form-check-input" id="pca_demean" name="pca_demean" type="checkbox" value="1" {% if pca_demean %}checked{% endif %}>
+                <label class="form-check-label" for="pca_demean">PCA demean</label>
+              </div>
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label" for="save_name">Save Run Name (optional)</label>
+              <input class="form-control" id="save_name" name="save_name" type="text" placeholder="My factor model" value="{{ save_name_value }}">
+              <p class="form-text">Saves the full inputs + data to a local pickle.</p>
+            </div>
+            <div class="col-12 col-md-6 d-flex align-items-end">
+              <div class="form-check">
+                <input class="form-check-input" id="save_overwrite" name="save_overwrite" type="checkbox" value="1" {% if save_overwrite %}checked{% endif %}>
+                <label class="form-check-label" for="save_overwrite">Overwrite existing saved run</label>
+              </div>
+            </div>
+            <div class="col-12 d-flex flex-column flex-sm-row gap-2 align-items-start align-items-sm-center">
+              <button class="btn btn-primary" type="submit">Run factor model</button>
+              <a class="btn btn-outline-secondary" href="{{ url_for('factor.saved_factor_analysis') }}">Saved runs</a>
+              <p class="text-muted small mb-0">Model fits ~20-60 GARCH processes; expect a short wait.</p>
+            </div>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div class="span-5">
+      <div class="card report-card">
+        <div class="card-body">
+          <h5 class="card-title">Run settings</h5>
+          {% if results %}
+            <div class="app-form">
+              <table class="table table-sm mb-0">
+              <tbody>
+                <tr>
+                  <th scope="row">As-of date</th>
+                  <td>{{ results.meta.as_of_date or '&mdash;' }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Train end</th>
+                  <td>{{ results.train_end or '&mdash;' }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Assets</th>
+                  <td>{{ results.meta.n_assets or '&mdash;' }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Factors</th>
+                  <td>{{ results.meta.n_factors or '&mdash;' }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">PCs</th>
+                  <td>{{ results.meta.n_pcs or '&mdash;' }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">GARCH dist</th>
+                  <td>{{ garch_dist }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Realized window</th>
+                  <td>{{ realized_window_value }} days</td>
+                </tr>
+              </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="text-muted mb-0">Run the analysis to see run settings.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {% if results and results.eval_summary %}
+    <section class="report-grid">
+      <div class="span-12">
+        <div class="card report-card">
+          <div class="card-body">
+            <h5 class="card-title">Evaluation Summary</h5>
+            <table class="table table-sm mb-0">
+              <thead>
+                <tr>
+                  <th scope="col">Metric</th>
+                  <th scope="col">In-Sample Mean</th>
+                  <th scope="col">Out-of-Sample Mean</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">Volatility MSE</th>
+                  <td>
+                    {% if results.eval_summary.vol_mse_in_sample %}
+                      {{ '%.6f' | format(results.eval_summary.vol_mse_in_sample.mean) }}
+                    {% else %}&mdash;{% endif %}
+                  </td>
+                  <td>
+                    {% if results.eval_summary.vol_mse_out_of_sample %}
+                      {{ '%.6f' | format(results.eval_summary.vol_mse_out_of_sample.mean) }}
+                    {% else %}&mdash;{% endif %}
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row">Correlation Frobenius Error</th>
+                  <td>
+                    {% if results.eval_summary.corr_frob_err_in_sample %}
+                      {{ '%.4f' | format(results.eval_summary.corr_frob_err_in_sample.mean) }}
+                    {% else %}&mdash;{% endif %}
+                  </td>
+                  <td>
+                    {% if results.eval_summary.corr_frob_err_out_of_sample %}
+                      {{ '%.4f' | format(results.eval_summary.corr_frob_err_out_of_sample.mean) }}
+                    {% else %}&mdash;{% endif %}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p class="text-muted small mt-2 mb-0">Lower values indicate better calibration. OOS values comparable to IS suggest the model generalizes well.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  {% endif %}
+
+  {% if results %}
+    <section class="report-grid report-grid--spaced">
+      {% if results.beta_heatmap %}
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Beta Loadings Heatmap</h5>
+              <p class="card-subtitle text-muted small mb-3">Each cell shows the regression beta of an industry on a Fama-French factor. Betas are estimated via LassoCV for variable selection, followed by OLS refit with t-statistic pruning. Assets are sorted by R-squared (top = highest); factors by variance explained.</p>
+              <div id="betaHeatmap" class="chart-container chart-container--tall"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+      {% if results.factor_corr_heatmap %}
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Factor Correlation Matrix</h5>
+              <p class="card-subtitle text-muted small mb-3">Correlation implied by the model&rsquo;s latest covariance forecast. Derived from the PCA decomposition: factor covariance = V &times; diag(h<sub>pc</sub>) &times; V&prime; where V are eigenvectors and h<sub>pc</sub> are GARCH-forecasted PC variances. Near-zero off-diagonal values validate the PCA decomposition.</p>
+              <div id="factorCorrHeatmap" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+      {% if results.agg_vol_backtest %}
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Aggregate Volatility Backtest</h5>
+              <p class="card-subtitle text-muted small mb-3">Cross-sectional average of model-predicted conditional volatility vs trailing {{ realized_window_value }}-day realized volatility (lagged 1 day). The dashed line marks the train/test split. Tight tracking out-of-sample indicates the model generalizes well.</p>
+              <div id="aggVolBacktest" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+      {% if results.vol_regression_scatter %}
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Volatility Regression Scatter</h5>
+              <p class="card-subtitle text-muted small mb-3">Each point is one industry: x = mean trailing realized vol, y = mean model-predicted vol (both annualized, OOS only). The gray line is y = x (perfect calibration). The red line is the regression fit. R&sup2; measures cross-sectional prediction quality.</p>
+              <div id="volRegressionScatter" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+    </section>
+
+    {% if results.per_asset_vol %}
+      <section class="report-grid report-grid--spaced">
+        <div class="span-12">
+          <div class="card report-card">
+            <div class="card-body">
+              <h5 class="card-title">Per-Asset Charts</h5>
+              <div class="row g-3 align-items-end">
+                <div class="col-12 col-md-6 col-lg-4">
+                  <label class="form-label" for="assetSelect">Select Industry</label>
+                  <select class="form-select" id="assetSelect"></select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Per-Asset Volatility Backtest</h5>
+              <p class="card-subtitle text-muted small mb-3">Model-predicted vs trailing realized volatility for the selected industry. The dashed line marks the train/test split.</p>
+              <div id="perAssetVolChart" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+
+        {% if results.per_asset_conf %}
+          <div class="span-12">
+            <div class="card chart-panel">
+              <div class="card-body p-4 p-lg-5">
+                <h5 class="card-title">Returns with Confidence Bands</h5>
+                <p class="card-subtitle text-muted small mb-3">Regression residuals (excess returns minus predicted factor contribution) with &plusmn;2&sigma; and &plusmn;3&sigma; conditional volatility bands from the GARCH model. Returns consistently outside bands suggest the model underestimates tail risk.</p>
+                <div id="perAssetConfChart" class="chart-container"></div>
+              </div>
+            </div>
+          </div>
+        {% endif %}
+
+        {% if results.per_asset_corr %}
+          <div class="span-12">
+            <div class="card chart-panel">
+              <div class="card-body p-4 p-lg-5">
+                <h5 class="card-title">Correlation Backtest</h5>
+                <p class="card-subtitle text-muted small mb-3">Predicted vs trailing correlation between the selected industry and an equal-weighted aggregate of all industries. Tests the model&rsquo;s ability to forecast co-movement, not just individual volatility.</p>
+                <div id="perAssetCorrChart" class="chart-container"></div>
+              </div>
+            </div>
+          </div>
+        {% endif %}
+      </section>
+    {% endif %}
+
+    <script src="https://cdn.plot.ly/plotly-2.35.0.min.js" crossorigin="anonymous"></script>
+    <script>
+      /* ---- Data payloads ---- */
+      const betaHeatmap = {{ results.beta_heatmap | tojson }};
+      const factorCorrHeatmap = {{ results.factor_corr_heatmap | tojson }};
+      const aggVolBacktest = {{ results.agg_vol_backtest | tojson }};
+      const volRegressionScatter = {{ results.vol_regression_scatter | tojson }};
+      const perAssetVolData = {{ results.per_asset_vol | tojson }};
+      const perAssetConfData = {{ results.per_asset_conf | tojson }};
+      const perAssetCorrData = {{ results.per_asset_corr | tojson }};
+
+      /* ---- Shared layout ---- */
+      const baseLayout = {
+        margin: { t: 40, r: 20, b: 60, l: 60 },
+        font: {
+          family: 'Source Sans 3, Segoe UI, Tahoma, sans-serif',
+          color: '#001f38',
+        },
+        paper_bgcolor: 'rgba(0, 0, 0, 0)',
+        plot_bgcolor: '#ffffff',
+        xaxis: {
+          tickformat: "'%y",
+          automargin: true,
+          showline: true,
+          linecolor: '#d8dadb',
+          linewidth: 1,
+          gridcolor: 'rgba(216, 218, 219, 0.4)',
+          tickfont: { color: '#667d89' },
+          titlefont: { color: '#001f38' },
+          zeroline: false,
+          title: '',
+        },
+        yaxis: {
+          automargin: true,
+          showline: true,
+          linecolor: '#d8dadb',
+          linewidth: 1,
+          gridcolor: 'rgba(216, 218, 219, 0.4)',
+          tickfont: { color: '#667d89' },
+          titlefont: { color: '#001f38' },
+          zeroline: false,
+        },
+        legend: {
+          x: 0.01, y: 0.99,
+          xanchor: 'left', yanchor: 'top',
+          bgcolor: 'rgba(0, 0, 0, 0)',
+          border: 'None'
+        },
+        showlegend: true,
+        hovermode: 'closest',
+        hoverlabel: { font: { color: '#001f38' } },
+      };
+
+      const plotCfg = { displaylogo: false, responsive: true };
+
+      /* ---- Colors (matching factor_charts.py palette) ---- */
+      const COL = {
+        forecast: '#e63946',
+        realized: '#457b9d',
+        ret:      '#001f38',
+        conf:     '#a8dadc',
+        identity: '#6c757d',
+        regr:     '#e63946',
+      };
+
+      /* ---- 1. Beta Loadings Heatmap ---- */
+      if (betaHeatmap) {
+        const container = document.getElementById('betaHeatmap');
+        Plotly.newPlot(container, [{
+          type: 'heatmap',
+          z: betaHeatmap.z,
+          x: betaHeatmap.x,
+          y: betaHeatmap.y,
+          colorscale: 'RdBu',
+          reversescale: true,
+          zmin: betaHeatmap.zmin,
+          zmax: betaHeatmap.zmax,
+          colorbar: { title: 'Beta' },
+          hovertemplate: '<b>%{y}</b> &times; %{x}<br>Beta: %{z:.3f}<extra></extra>',
+        }], {
+          ...baseLayout,
+          margin: { t: 30, r: 40, b: 100, l: 140 },
+          xaxis: { ...baseLayout.xaxis, tickformat: '', tickangle: -45 },
+          yaxis: { ...baseLayout.yaxis, autorange: 'reversed' },
+        }, plotCfg);
+      }
+
+      /* ---- 2. Factor Correlation Heatmap ---- */
+      if (factorCorrHeatmap) {
+        const container = document.getElementById('factorCorrHeatmap');
+        Plotly.newPlot(container, [{
+          type: 'heatmap',
+          z: factorCorrHeatmap.z,
+          x: factorCorrHeatmap.x,
+          y: factorCorrHeatmap.y,
+          colorscale: 'RdBu',
+          reversescale: true,
+          zmin: -1,
+          zmax: 1,
+          colorbar: { title: 'Corr' },
+          hovertemplate: '%{y} vs %{x}<br>Corr: %{z:.3f}<extra></extra>',
+        }], {
+          ...baseLayout,
+          margin: { t: 30, r: 40, b: 100, l: 140 },
+          xaxis: { ...baseLayout.xaxis, tickformat: '' },
+          yaxis: { ...baseLayout.yaxis, autorange: 'reversed' },
+        }, plotCfg);
+      }
+
+      /* ---- 3. Aggregate Volatility Backtest ---- */
+      if (aggVolBacktest && aggVolBacktest.series && aggVolBacktest.series.length) {
+        const traces = aggVolBacktest.series.map((s, i) => ({
+          type: 'scatter', mode: 'lines',
+          name: s.name, x: s.x, y: s.y,
+          line: { color: i === 0 ? COL.forecast : COL.realized, width: 1.6 },
+          hovertemplate: '<b>' + s.name + '</b><br>%{x|%m/%d/%y}<br>%{y:.4f}<extra></extra>',
+        }));
+        if (aggVolBacktest.train_end) {
+          traces.push({
+            type: 'scatter', mode: 'lines',
+            name: 'Train end',
+            x: [aggVolBacktest.train_end, aggVolBacktest.train_end],
+            y: [0, 1],
+            line: { color: COL.identity, width: 1.2, dash: 'dash' },
+            hoverinfo: 'skip', showlegend: true,
+            yaxis: 'y',
+          });
+        }
+        Plotly.newPlot(document.getElementById('aggVolBacktest'), traces, {
+          ...baseLayout,
+          yaxis: { ...baseLayout.yaxis, title: aggVolBacktest.y_axis_title || 'Ann. vol' },
+        }, plotCfg);
+      }
+
+      /* ---- 4. Volatility Regression Scatter ---- */
+      if (volRegressionScatter) {
+        const d = volRegressionScatter;
+        const traces = [
+          {
+            type: 'scatter', mode: 'markers+text',
+            x: d.x, y: d.y,
+            text: d.labels,
+            textposition: 'top center',
+            textfont: { size: 9, color: '#667d89' },
+            marker: { color: COL.realized, size: 8 },
+            name: 'Assets',
+            hovertemplate: '<b>%{text}</b><br>Trailing: %{x:.4f}<br>Predicted: %{y:.4f}<extra></extra>',
+          },
+          {
+            type: 'scatter', mode: 'lines',
+            x: [d.identity_line.lo, d.identity_line.hi],
+            y: [d.identity_line.lo, d.identity_line.hi],
+            line: { color: COL.identity, width: 1.2 },
+            name: 'y = x',
+            hoverinfo: 'skip',
+          },
+          {
+            type: 'scatter', mode: 'lines',
+            x: [d.identity_line.lo, d.identity_line.hi],
+            y: [
+              d.regression.a + d.regression.b * d.identity_line.lo,
+              d.regression.a + d.regression.b * d.identity_line.hi,
+            ],
+            line: { color: COL.regr, width: 1.6 },
+            name: 'Fit (R\u00b2=' + d.regression.r2.toFixed(3) + ')',
+            hoverinfo: 'skip',
+          },
+        ];
+        Plotly.newPlot(document.getElementById('volRegressionScatter'), traces, {
+          ...baseLayout,
+          xaxis: { ...baseLayout.xaxis, title: 'Trailing realized vol (ann.)', tickformat: '' },
+          yaxis: { ...baseLayout.yaxis, title: 'Predicted conditional vol (ann.)' },
+        }, plotCfg);
+      }
+
+      /* ---- Per-asset chart rendering ---- */
+      function renderPerAssetVol(asset) {
+        if (!perAssetVolData || !perAssetVolData.data[asset]) return;
+        const d = perAssetVolData.data[asset];
+        const traces = [
+          {
+            type: 'scatter', mode: 'lines',
+            name: 'Predicted', x: d.x, y: d.pred,
+            line: { color: COL.forecast, width: 1.4 },
+            hovertemplate: '<b>Predicted</b><br>%{x|%m/%d/%y}<br>%{y:.4f}<extra></extra>',
+          },
+          {
+            type: 'scatter', mode: 'lines',
+            name: 'Trailing', x: d.x, y: d.real,
+            line: { color: COL.realized, width: 1.4 },
+            hovertemplate: '<b>Trailing</b><br>%{x|%m/%d/%y}<br>%{y:.4f}<extra></extra>',
+          },
+        ];
+        if (perAssetVolData.train_end) {
+          traces.push({
+            type: 'scatter', mode: 'lines',
+            name: 'Train end',
+            x: [perAssetVolData.train_end, perAssetVolData.train_end],
+            y: [0, 1],
+            line: { color: COL.identity, width: 1.2, dash: 'dash' },
+            hoverinfo: 'skip',
+          });
+        }
+        Plotly.react(document.getElementById('perAssetVolChart'), traces, {
+          ...baseLayout,
+          yaxis: { ...baseLayout.yaxis, title: 'Annualized volatility' },
+        }, plotCfg);
+      }
+
+      function renderPerAssetConf(asset) {
+        if (!perAssetConfData || !perAssetConfData.data[asset]) return;
+        const el = document.getElementById('perAssetConfChart');
+        if (!el) return;
+        const d = perAssetConfData.data[asset];
+        const traces = [
+          {
+            type: 'scatter', mode: 'lines',
+            name: '+3\u03c3', x: d.x, y: d.upper_3s,
+            line: { color: COL.conf, width: 0.8 },
+            hoverinfo: 'skip',
+          },
+          {
+            type: 'scatter', mode: 'lines',
+            name: '-3\u03c3', x: d.x, y: d.lower_3s,
+            line: { color: COL.conf, width: 0.8 },
+            hoverinfo: 'skip',
+          },
+          {
+            type: 'scatter', mode: 'lines',
+            name: '+2\u03c3', x: d.x, y: d.upper_2s,
+            line: { color: COL.conf, width: 0.9 },
+            hoverinfo: 'skip',
+          },
+          {
+            type: 'scatter', mode: 'lines',
+            name: '-2\u03c3', x: d.x, y: d.lower_2s,
+            line: { color: COL.conf, width: 0.9 },
+            hoverinfo: 'skip',
+          },
+          {
+            type: 'scatter', mode: 'lines',
+            name: 'Residual return', x: d.x, y: d.returns,
+            line: { color: COL.ret, width: 0.9 },
+            hovertemplate: '<b>Residual</b><br>%{x|%m/%d/%y}<br>%{y:.4f}<extra></extra>',
+          },
+        ];
+        Plotly.react(el, traces, {
+          ...baseLayout,
+          yaxis: { ...baseLayout.yaxis, title: 'Daily return' },
+        }, plotCfg);
+      }
+
+      function renderPerAssetCorr(asset) {
+        if (!perAssetCorrData || !perAssetCorrData.data[asset]) return;
+        const el = document.getElementById('perAssetCorrChart');
+        if (!el) return;
+        const d = perAssetCorrData.data[asset];
+        const traces = [
+          {
+            type: 'scatter', mode: 'lines',
+            name: 'Predicted', x: d.x, y: d.pred,
+            line: { color: COL.forecast, width: 1.4 },
+            hovertemplate: '<b>Predicted</b><br>%{x|%m/%d/%y}<br>%{y:.3f}<extra></extra>',
+          },
+          {
+            type: 'scatter', mode: 'lines',
+            name: 'Trailing', x: d.x, y: d.real,
+            line: { color: COL.realized, width: 1.4 },
+            hovertemplate: '<b>Trailing</b><br>%{x|%m/%d/%y}<br>%{y:.3f}<extra></extra>',
+          },
+        ];
+        if (perAssetCorrData.train_end) {
+          traces.push({
+            type: 'scatter', mode: 'lines',
+            name: 'Train end',
+            x: [perAssetCorrData.train_end, perAssetCorrData.train_end],
+            y: [-1, 1],
+            line: { color: COL.identity, width: 1.2, dash: 'dash' },
+            hoverinfo: 'skip',
+          });
+        }
+        Plotly.react(el, traces, {
+          ...baseLayout,
+          yaxis: { ...baseLayout.yaxis, title: 'Correlation' },
+        }, plotCfg);
+      }
+
+      function updatePerAssetCharts() {
+        const select = document.getElementById('assetSelect');
+        if (!select) return;
+        const asset = select.value;
+        renderPerAssetVol(asset);
+        renderPerAssetConf(asset);
+        renderPerAssetCorr(asset);
+      }
+
+      /* ---- Populate asset dropdown & wire change ---- */
+      if (perAssetVolData && perAssetVolData.assets) {
+        const select = document.getElementById('assetSelect');
+        perAssetVolData.assets.forEach(function(a, i) {
+          const opt = document.createElement('option');
+          opt.value = a;
+          opt.textContent = a;
+          if (i === 0) opt.selected = true;
+          select.appendChild(opt);
+        });
+        select.addEventListener('change', updatePerAssetCharts);
+        updatePerAssetCharts();
+      }
+    </script>
+  {% endif %}
+{% endblock %}

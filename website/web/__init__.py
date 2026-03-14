@@ -10,6 +10,7 @@ def create_app() -> Flask:
     app.config["SECRET_KEY"] = os.environ.get("QDASH_SECRET_KEY", "dev-secret-key")
 
     from .blueprints.core.routes import core_bp
+    from .blueprints.factor.routes import factor_bp
     from .blueprints.options.routes import options_bp
     from .blueprints.style.routes import style_bp
     from .blueprints.universe.routes import universe_bp
@@ -18,6 +19,7 @@ def create_app() -> Flask:
     app.register_blueprint(universe_bp)
     app.register_blueprint(options_bp)
     app.register_blueprint(style_bp)
+    app.register_blueprint(factor_bp)
 
     return app
 

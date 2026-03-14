@@ -442,6 +442,11 @@ a:hover {
   background: #ffffff;
 }
 
+.chart-container--tall {
+  height: 800px;
+  min-height: 70vh;
+}
+
 .card-subtitle {
   color: var(--muted);
 }
