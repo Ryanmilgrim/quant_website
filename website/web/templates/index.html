@@ -24,6 +24,7 @@
             <a class="btn btn-primary" href="{{ url_for('universe.investment_universe') }}">Investment Universe</a>
             <a class="btn btn-outline-secondary" href="{{ url_for('style.benchmark_style') }}">Benchmark Style</a>
             <a class="btn btn-outline-secondary" href="{{ url_for('options.black_scholes_view') }}">Black-Scholes Pricing</a>
+            <a class="btn btn-outline-secondary" href="{{ url_for('factor.factor_analysis') }}">Factor Analysis</a>
           </div>
         </div>
       </div>
@@ -57,7 +58,7 @@
     <div class="section-text">
       <p class="section-kicker">Modules</p>
       <h2 class="section-title">Research workbenches</h2>
-      <p class="section-lede">Two entry points keep the demo focused and extendable.</p>
+      <p class="section-lede">Four entry points keep the demo focused and extendable.</p>
     </div>
     <div class="section-rule"></div>
   </section>
@@ -90,6 +91,16 @@
           <h5 class="card-title">Benchmark Style Tracking</h5>
           <p class="card-text">Fit a long-only style mix that tracks the benchmark over rolling windows.</p>
           <a class="text-link" href="{{ url_for('style.benchmark_style') }}">Open style tracker</a>
+        </div>
+      </div>
+    </div>
+    <div class="span-6">
+      <div class="card report-card">
+        <div class="card-body">
+          <p class="card-kicker">Risk lab</p>
+          <h5 class="card-title">Factor Risk Model</h5>
+          <p class="card-text">Estimate a PCA-based covariance model with GARCH conditional variance and backtest it out of sample.</p>
+          <a class="text-link" href="{{ url_for('factor.factor_analysis') }}">Open factor model</a>
         </div>
       </div>
     </div>

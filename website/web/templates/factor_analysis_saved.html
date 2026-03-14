@@ -1,0 +1,478 @@
+{% extends 'base.html' %}
+
+{% block content %}
+  <section class="section-header">
+    <span class="section-number">07</span>
+    <div class="section-text">
+      <p class="section-kicker">Risk lab</p>
+      <h2 class="section-title">Saved Factor Runs</h2>
+      <p class="section-lede">Load prior factor analysis runs stored locally.</p>
+      <p class="section-note">Saved runs include inputs, data, and the full model results.</p>
+    </div>
+    <div class="section-rule"></div>
+  </section>
+
+  <section class="report-grid report-grid--spaced">
+    <div class="{% if snapshot_meta %}span-6{% else %}span-12{% endif %}">
+      <div class="card report-card">
+        <div class="card-body">
+          <h5 class="card-title">Saved runs</h5>
+          {% if saved_runs %}
+            <form method="get" class="app-form">
+              <div class="row g-3">
+                <div class="col-12">
+                  <label class="form-label" for="run">Select saved run</label>
+                  <select class="form-select" id="run" name="run">
+                    <option value="">Choose a saved run</option>
+                    {% for run in saved_runs %}
+                      <option value="{{ run.key }}" {% if run.key == selected_key %}selected{% endif %}>
+                        {{ run.name }} ({{ run.created_at.strftime('%Y-%m-%d') }})
+                      </option>
+                    {% endfor %}
+                  </select>
+                  <p class="form-text">Saved locally under instance/analysis_results/factor_analysis.</p>
+                </div>
+                <div class="col-12 d-flex flex-column flex-sm-row gap-2">
+                  <button class="btn btn-primary" type="submit">Load saved run</button>
+                  <a class="btn btn-outline-secondary" href="{{ url_for('factor.factor_analysis') }}">Run new analysis</a>
+                </div>
+              </div>
+            </form>
+            {% if not snapshot_meta %}
+              <p class="text-muted small mt-3 mb-0">Select a saved run to review its settings.</p>
+            {% endif %}
+            <div class="mt-4">
+              <h6 class="text-uppercase text-muted mb-2">Available runs</h6>
+              <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th scope="col">Name</th>
+                      <th scope="col">Saved</th>
+                      <th scope="col">Universe</th>
+                      <th scope="col">GARCH</th>
+                      <th scope="col">Train Frac</th>
+                      <th scope="col">Assets</th>
+                      <th scope="col">Factors</th>
+                      <th scope="col">PCs</th>
+                      <th scope="col">Date Range</th>
+                      <th scope="col" class="text-end">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for run in saved_runs %}
+                      <tr>
+                        <th scope="row">{{ run.name }}</th>
+                        <td>{{ run.created_at.strftime('%Y-%m-%d') }}</td>
+                        <td>{{ run.universe }}</td>
+                        <td>{{ run.garch_dist }}</td>
+                        <td>{{ '%.0f' | format(run.train_fraction * 100) }}%</td>
+                        <td>{{ run.n_assets }}</td>
+                        <td>{{ run.n_factors }}</td>
+                        <td>{{ run.n_pcs }}</td>
+                        <td>
+                          {% if run.as_of_date %}
+                            {% if run.train_end %}
+                              {{ run.train_end }} &rarr; {{ run.as_of_date }}
+                            {% else %}
+                              &rarr; {{ run.as_of_date }}
+                            {% endif %}
+                          {% else %}
+                            &mdash;
+                          {% endif %}
+                        </td>
+                        <td class="text-end">
+                          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('factor.view_saved_factor_analysis', run_key=run.key) }}">View</a>
+                          <form method="post" action="{{ url_for('factor.delete_saved_factor_analysis', run_key=run.key) }}" class="d-inline">
+                            <input type="hidden" name="confirm" value="1">
+                            <button class="btn btn-sm btn-outline-danger" type="submit">Delete</button>
+                          </form>
+                        </td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          {% else %}
+            <p class="text-muted mb-0">No saved runs yet. Run a factor analysis and save it.</p>
+            <a class="btn btn-outline-secondary mt-3" href="{{ url_for('factor.factor_analysis') }}">Run new analysis</a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    {% if snapshot_meta %}
+      <div class="span-6">
+        <div class="card report-card">
+          <div class="card-body">
+            <h5 class="card-title">Saved run details</h5>
+            <table class="table table-sm mb-0">
+              <tbody>
+                <tr>
+                  <th scope="row">Name</th>
+                  <td>{{ snapshot_meta.name }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Saved</th>
+                  <td>{{ snapshot_meta.created_at }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Universe</th>
+                  <td>{{ snapshot_meta.universe }} Industries</td>
+                </tr>
+                <tr>
+                  <th scope="row">GARCH dist</th>
+                  <td>{{ snapshot_meta.garch_dist }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">PCA demean</th>
+                  <td>{{ 'Yes' if snapshot_meta.pca_demean else 'No' }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">Train fraction</th>
+                  <td>{{ '%.0f' | format(snapshot_meta.train_fraction * 100) }}%</td>
+                </tr>
+                <tr>
+                  <th scope="row">Realized window</th>
+                  <td>{{ snapshot_meta.realized_window }} days</td>
+                </tr>
+                <tr>
+                  <th scope="row">Start Date</th>
+                  <td>
+                    {% if snapshot_meta.start_date %}
+                      {{ snapshot_meta.start_date }}
+                    {% else %}
+                      &mdash;
+                    {% endif %}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    {% endif %}
+  </section>
+
+  {% if results %}
+    <section class="report-grid report-grid--spaced">
+      {% if results.eval_summary %}
+        <div class="span-12">
+          <div class="card report-card">
+            <div class="card-body">
+              <h5 class="card-title">Evaluation Summary</h5>
+              <table class="table table-sm mb-0">
+                <thead>
+                  <tr>
+                    <th scope="col">Metric</th>
+                    <th scope="col">In-Sample Mean</th>
+                    <th scope="col">Out-of-Sample Mean</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <th scope="row">Volatility MSE</th>
+                    <td>
+                      {% if results.eval_summary.vol_mse_in_sample %}
+                        {{ '%.6f' | format(results.eval_summary.vol_mse_in_sample.mean) }}
+                      {% else %}&mdash;{% endif %}
+                    </td>
+                    <td>
+                      {% if results.eval_summary.vol_mse_out_of_sample %}
+                        {{ '%.6f' | format(results.eval_summary.vol_mse_out_of_sample.mean) }}
+                      {% else %}&mdash;{% endif %}
+                    </td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Correlation Frobenius Error</th>
+                    <td>
+                      {% if results.eval_summary.corr_frob_err_in_sample %}
+                        {{ '%.4f' | format(results.eval_summary.corr_frob_err_in_sample.mean) }}
+                      {% else %}&mdash;{% endif %}
+                    </td>
+                    <td>
+                      {% if results.eval_summary.corr_frob_err_out_of_sample %}
+                        {{ '%.4f' | format(results.eval_summary.corr_frob_err_out_of_sample.mean) }}
+                      {% else %}&mdash;{% endif %}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+      {% if results.beta_heatmap %}
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Beta Loadings Heatmap</h5>
+              <p class="card-subtitle text-muted small mb-3">Each cell shows the regression beta of an industry on a Fama-French factor. Assets sorted by R-squared; factors by variance explained.</p>
+              <div id="betaHeatmap" class="chart-container chart-container--tall"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+      {% if results.factor_corr_heatmap %}
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Factor Correlation Matrix</h5>
+              <p class="card-subtitle text-muted small mb-3">Correlation implied by the model&rsquo;s latest covariance forecast.</p>
+              <div id="factorCorrHeatmap" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+      {% if results.agg_vol_backtest %}
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Aggregate Volatility Backtest</h5>
+              <p class="card-subtitle text-muted small mb-3">Cross-sectional average of model-predicted vs trailing realized volatility.</p>
+              <div id="aggVolBacktest" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+      {% if results.vol_regression_scatter %}
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Volatility Regression Scatter</h5>
+              <p class="card-subtitle text-muted small mb-3">One point per industry: predicted vs trailing vol (OOS, annualized).</p>
+              <div id="volRegressionScatter" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+    </section>
+
+    {% if results.per_asset_vol %}
+      <section class="report-grid report-grid--spaced">
+        <div class="span-12">
+          <div class="card report-card">
+            <div class="card-body">
+              <h5 class="card-title">Per-Asset Charts</h5>
+              <div class="row g-3 align-items-end">
+                <div class="col-12 col-md-6 col-lg-4">
+                  <label class="form-label" for="assetSelect">Select Industry</label>
+                  <select class="form-select" id="assetSelect"></select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Per-Asset Volatility Backtest</h5>
+              <div id="perAssetVolChart" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+
+        {% if results.per_asset_conf %}
+          <div class="span-12">
+            <div class="card chart-panel">
+              <div class="card-body p-4 p-lg-5">
+                <h5 class="card-title">Returns with Confidence Bands</h5>
+                <div id="perAssetConfChart" class="chart-container"></div>
+              </div>
+            </div>
+          </div>
+        {% endif %}
+
+        {% if results.per_asset_corr %}
+          <div class="span-12">
+            <div class="card chart-panel">
+              <div class="card-body p-4 p-lg-5">
+                <h5 class="card-title">Correlation Backtest</h5>
+                <div id="perAssetCorrChart" class="chart-container"></div>
+              </div>
+            </div>
+          </div>
+        {% endif %}
+      </section>
+    {% endif %}
+
+    <script src="https://cdn.plot.ly/plotly-2.35.0.min.js" crossorigin="anonymous"></script>
+    <script>
+      const betaHeatmap = {{ results.beta_heatmap | tojson }};
+      const factorCorrHeatmap = {{ results.factor_corr_heatmap | tojson }};
+      const aggVolBacktest = {{ results.agg_vol_backtest | tojson }};
+      const volRegressionScatter = {{ results.vol_regression_scatter | tojson }};
+      const perAssetVolData = {{ results.per_asset_vol | tojson }};
+      const perAssetConfData = {{ results.per_asset_conf | tojson }};
+      const perAssetCorrData = {{ results.per_asset_corr | tojson }};
+
+      const baseLayout = {
+        margin: { t: 40, r: 20, b: 60, l: 60 },
+        font: { family: 'Source Sans 3, Segoe UI, Tahoma, sans-serif', color: '#001f38' },
+        paper_bgcolor: 'rgba(0, 0, 0, 0)',
+        plot_bgcolor: '#ffffff',
+        xaxis: {
+          tickformat: "'%y", automargin: true, showline: true,
+          linecolor: '#d8dadb', linewidth: 1, gridcolor: 'rgba(216, 218, 219, 0.4)',
+          tickfont: { color: '#667d89' }, titlefont: { color: '#001f38' },
+          zeroline: false, title: '',
+        },
+        yaxis: {
+          automargin: true, showline: true,
+          linecolor: '#d8dadb', linewidth: 1, gridcolor: 'rgba(216, 218, 219, 0.4)',
+          tickfont: { color: '#667d89' }, titlefont: { color: '#001f38' },
+          zeroline: false,
+        },
+        legend: { x: 0.01, y: 0.99, xanchor: 'left', yanchor: 'top', bgcolor: 'rgba(0, 0, 0, 0)', border: 'None' },
+        showlegend: true, hovermode: 'closest',
+        hoverlabel: { font: { color: '#001f38' } },
+      };
+      const plotCfg = { displaylogo: false, responsive: true };
+      const COL = { forecast: '#e63946', realized: '#457b9d', ret: '#001f38', conf: '#a8dadc', identity: '#6c757d', regr: '#e63946' };
+
+      if (betaHeatmap) {
+        Plotly.newPlot(document.getElementById('betaHeatmap'), [{
+          type: 'heatmap', z: betaHeatmap.z, x: betaHeatmap.x, y: betaHeatmap.y,
+          colorscale: 'RdBu', reversescale: true, zmin: betaHeatmap.zmin, zmax: betaHeatmap.zmax,
+          colorbar: { title: 'Beta' },
+          hovertemplate: '<b>%{y}</b> &times; %{x}<br>Beta: %{z:.3f}<extra></extra>',
+        }], {
+          ...baseLayout,
+          margin: { t: 30, r: 40, b: 100, l: 140 },
+          xaxis: { ...baseLayout.xaxis, tickformat: '', tickangle: -45 },
+          yaxis: { ...baseLayout.yaxis, autorange: 'reversed' },
+        }, plotCfg);
+      }
+
+      if (factorCorrHeatmap) {
+        Plotly.newPlot(document.getElementById('factorCorrHeatmap'), [{
+          type: 'heatmap', z: factorCorrHeatmap.z, x: factorCorrHeatmap.x, y: factorCorrHeatmap.y,
+          colorscale: 'RdBu', reversescale: true, zmin: -1, zmax: 1,
+          colorbar: { title: 'Corr' },
+          hovertemplate: '%{y} vs %{x}<br>Corr: %{z:.3f}<extra></extra>',
+        }], {
+          ...baseLayout,
+          margin: { t: 30, r: 40, b: 100, l: 140 },
+          xaxis: { ...baseLayout.xaxis, tickformat: '' },
+          yaxis: { ...baseLayout.yaxis, autorange: 'reversed' },
+        }, plotCfg);
+      }
+
+      if (aggVolBacktest && aggVolBacktest.series && aggVolBacktest.series.length) {
+        const traces = aggVolBacktest.series.map((s, i) => ({
+          type: 'scatter', mode: 'lines', name: s.name, x: s.x, y: s.y,
+          line: { color: i === 0 ? COL.forecast : COL.realized, width: 1.6 },
+          hovertemplate: '<b>' + s.name + '</b><br>%{x|%m/%d/%y}<br>%{y:.4f}<extra></extra>',
+        }));
+        if (aggVolBacktest.train_end) {
+          traces.push({ type: 'scatter', mode: 'lines', name: 'Train end',
+            x: [aggVolBacktest.train_end, aggVolBacktest.train_end], y: [0, 1],
+            line: { color: COL.identity, width: 1.2, dash: 'dash' }, hoverinfo: 'skip' });
+        }
+        Plotly.newPlot(document.getElementById('aggVolBacktest'), traces, {
+          ...baseLayout, yaxis: { ...baseLayout.yaxis, title: aggVolBacktest.y_axis_title || 'Ann. vol' },
+        }, plotCfg);
+      }
+
+      if (volRegressionScatter) {
+        const d = volRegressionScatter;
+        Plotly.newPlot(document.getElementById('volRegressionScatter'), [
+          { type: 'scatter', mode: 'markers+text', x: d.x, y: d.y, text: d.labels,
+            textposition: 'top center', textfont: { size: 9, color: '#667d89' },
+            marker: { color: COL.realized, size: 8 }, name: 'Assets',
+            hovertemplate: '<b>%{text}</b><br>Trailing: %{x:.4f}<br>Predicted: %{y:.4f}<extra></extra>' },
+          { type: 'scatter', mode: 'lines', x: [d.identity_line.lo, d.identity_line.hi],
+            y: [d.identity_line.lo, d.identity_line.hi], line: { color: COL.identity, width: 1.2 },
+            name: 'y = x', hoverinfo: 'skip' },
+          { type: 'scatter', mode: 'lines', x: [d.identity_line.lo, d.identity_line.hi],
+            y: [d.regression.a + d.regression.b * d.identity_line.lo, d.regression.a + d.regression.b * d.identity_line.hi],
+            line: { color: COL.regr, width: 1.6 }, name: 'Fit (R\u00b2=' + d.regression.r2.toFixed(3) + ')', hoverinfo: 'skip' },
+        ], {
+          ...baseLayout,
+          xaxis: { ...baseLayout.xaxis, title: 'Trailing realized vol (ann.)', tickformat: '' },
+          yaxis: { ...baseLayout.yaxis, title: 'Predicted conditional vol (ann.)' },
+        }, plotCfg);
+      }
+
+      function renderPerAssetVol(asset) {
+        if (!perAssetVolData || !perAssetVolData.data[asset]) return;
+        const d = perAssetVolData.data[asset];
+        const traces = [
+          { type: 'scatter', mode: 'lines', name: 'Predicted', x: d.x, y: d.pred,
+            line: { color: COL.forecast, width: 1.4 }, hovertemplate: '<b>Predicted</b><br>%{x|%m/%d/%y}<br>%{y:.4f}<extra></extra>' },
+          { type: 'scatter', mode: 'lines', name: 'Trailing', x: d.x, y: d.real,
+            line: { color: COL.realized, width: 1.4 }, hovertemplate: '<b>Trailing</b><br>%{x|%m/%d/%y}<br>%{y:.4f}<extra></extra>' },
+        ];
+        if (perAssetVolData.train_end) {
+          traces.push({ type: 'scatter', mode: 'lines', name: 'Train end',
+            x: [perAssetVolData.train_end, perAssetVolData.train_end], y: [0, 1],
+            line: { color: COL.identity, width: 1.2, dash: 'dash' }, hoverinfo: 'skip' });
+        }
+        Plotly.react(document.getElementById('perAssetVolChart'), traces, {
+          ...baseLayout, yaxis: { ...baseLayout.yaxis, title: 'Annualized volatility' },
+        }, plotCfg);
+      }
+
+      function renderPerAssetConf(asset) {
+        if (!perAssetConfData || !perAssetConfData.data[asset]) return;
+        const el = document.getElementById('perAssetConfChart');
+        if (!el) return;
+        const d = perAssetConfData.data[asset];
+        Plotly.react(el, [
+          { type: 'scatter', mode: 'lines', name: '+3\u03c3', x: d.x, y: d.upper_3s, line: { color: COL.conf, width: 0.8 }, hoverinfo: 'skip' },
+          { type: 'scatter', mode: 'lines', name: '-3\u03c3', x: d.x, y: d.lower_3s, line: { color: COL.conf, width: 0.8 }, hoverinfo: 'skip' },
+          { type: 'scatter', mode: 'lines', name: '+2\u03c3', x: d.x, y: d.upper_2s, line: { color: COL.conf, width: 0.9 }, hoverinfo: 'skip' },
+          { type: 'scatter', mode: 'lines', name: '-2\u03c3', x: d.x, y: d.lower_2s, line: { color: COL.conf, width: 0.9 }, hoverinfo: 'skip' },
+          { type: 'scatter', mode: 'lines', name: 'Residual return', x: d.x, y: d.returns, line: { color: COL.ret, width: 0.9 },
+            hovertemplate: '<b>Residual</b><br>%{x|%m/%d/%y}<br>%{y:.4f}<extra></extra>' },
+        ], { ...baseLayout, yaxis: { ...baseLayout.yaxis, title: 'Daily return' } }, plotCfg);
+      }
+
+      function renderPerAssetCorr(asset) {
+        if (!perAssetCorrData || !perAssetCorrData.data[asset]) return;
+        const el = document.getElementById('perAssetCorrChart');
+        if (!el) return;
+        const d = perAssetCorrData.data[asset];
+        const traces = [
+          { type: 'scatter', mode: 'lines', name: 'Predicted', x: d.x, y: d.pred, line: { color: COL.forecast, width: 1.4 },
+            hovertemplate: '<b>Predicted</b><br>%{x|%m/%d/%y}<br>%{y:.3f}<extra></extra>' },
+          { type: 'scatter', mode: 'lines', name: 'Trailing', x: d.x, y: d.real, line: { color: COL.realized, width: 1.4 },
+            hovertemplate: '<b>Trailing</b><br>%{x|%m/%d/%y}<br>%{y:.3f}<extra></extra>' },
+        ];
+        if (perAssetCorrData.train_end) {
+          traces.push({ type: 'scatter', mode: 'lines', name: 'Train end',
+            x: [perAssetCorrData.train_end, perAssetCorrData.train_end], y: [-1, 1],
+            line: { color: COL.identity, width: 1.2, dash: 'dash' }, hoverinfo: 'skip' });
+        }
+        Plotly.react(el, traces, { ...baseLayout, yaxis: { ...baseLayout.yaxis, title: 'Correlation' } }, plotCfg);
+      }
+
+      function updatePerAssetCharts() {
+        const select = document.getElementById('assetSelect');
+        if (!select) return;
+        const asset = select.value;
+        renderPerAssetVol(asset);
+        renderPerAssetConf(asset);
+        renderPerAssetCorr(asset);
+      }
+
+      if (perAssetVolData && perAssetVolData.assets) {
+        const select = document.getElementById('assetSelect');
+        perAssetVolData.assets.forEach(function(a, i) {
+          const opt = document.createElement('option');
+          opt.value = a; opt.textContent = a;
+          if (i === 0) opt.selected = true;
+          select.appendChild(opt);
+        });
+        select.addEventListener('change', updatePerAssetCharts);
+        updatePerAssetCharts();
+      }
+    </script>
+  {% endif %}
+{% endblock %}
