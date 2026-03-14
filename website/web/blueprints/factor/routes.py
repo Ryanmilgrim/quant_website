@@ -237,61 +237,57 @@ def _summarize_factor_run(run: FactorRun) -> dict:
     pc_cond_var = run.results.get("pc_cond_var")
     eigen_vectors = run.results.get("eigen_vectors")
     if pc_cond_var is not None and eigen_vectors is not None:
-        ev_mat = eigen_vectors.to_numpy(dtype=float)
+        ev_mat = eigen_vectors.to_numpy(dtype=float)       # (K, P)
         fv_idx = pc_cond_var.index
-        step = _thin(len(fv_idx))
-        fv_thinned = fv_idx[::step]
-        fv_dates = _dates_to_strings(fv_thinned)
+        fv_dates = _dates_to_strings(fv_idx)
         factor_names = [str(f) for f in eigen_vectors.index]
+        n_f = len(factor_names)
 
-        # Vectorized: diag(V @ diag(h) @ V') = V^2 @ h
+        # Vectorized vol: diag(V @ diag(h) @ V') = V^2 @ h  ->  (T, K)
         V_sq = ev_mat ** 2
-        h_pc_arr = pc_cond_var.loc[fv_thinned].to_numpy(dtype=float)
-        factor_var = h_pc_arr @ V_sq.T
+        h_pc_arr = pc_cond_var.to_numpy(dtype=float)       # (T, P)
+        factor_var = h_pc_arr @ V_sq.T                      # (T, K)
         factor_vol = np.sqrt(np.clip(factor_var, 0, None)) * float(np.sqrt(252))
 
         fv_vol_data = {}
         for i, fname in enumerate(factor_names):
             fv_vol_data[fname] = _safe_list(np.round(factor_vol[:, i], 6))
 
-        # Factor-to-factor correlation + covariance timeseries
+        # Vectorized correlation + covariance: Sf(t) = V @ diag(h_t) @ V'
+        # Full cov matrix per t:  cov[t] = (V * h[t]) @ V'  ->  (T, K, K)
+        h_clipped = np.clip(h_pc_arr, 0.0, None)           # (T, P)
+        Vh = ev_mat[np.newaxis, :, :] * h_clipped[:, np.newaxis, :]  # (T, K, P)
+        cov_all = np.einsum("tkp,jp->tkj", Vh, ev_mat)     # (T, K, K)
+        # Symmetry guard
+        cov_all = 0.5 * (cov_all + np.swapaxes(cov_all, 1, 2))
+        # Correlation: corr[i,j] = cov[i,j] / sqrt(cov[i,i] * cov[j,j])
+        diag_vol = np.sqrt(np.clip(np.diagonal(cov_all, axis1=1, axis2=2), 1e-30, None))  # (T, K)
+        denom = diag_vol[:, :, np.newaxis] * diag_vol[:, np.newaxis, :]  # (T, K, K)
+        corr_all = np.clip(cov_all / denom, -1.0, 1.0)
+
+        # Build corr_data dict
         fv_corr_data: dict[str, dict[str, list]] = {}
-        fv_cov_data: dict[str, list] = {}
-        n_f = len(factor_names)
-        # Initialize cov_data keys: upper triangle + diagonal
         for fi in range(n_f):
-            fv_cov_data[f"Var({factor_names[fi]})"] = []
-            for fj in range(fi + 1, n_f):
-                fv_cov_data[f"Cov({factor_names[fi]}, {factor_names[fj]})"] = []
-        for t_i in range(len(fv_thinned)):
-            h_pc_t = np.clip(h_pc_arr[t_i], 0.0, None)
-            Sf = ev_mat @ np.diag(h_pc_t) @ ev_mat.T
-            Sf = 0.5 * (Sf + Sf.T)
-            d = np.sqrt(np.clip(np.diag(Sf), 1e-30, None))
-            corr_mat = Sf / np.outer(d, d)
-            np.clip(corr_mat, -1.0, 1.0, out=corr_mat)
-            for fi in range(n_f):
-                fname = factor_names[fi]
-                if fname not in fv_corr_data:
-                    fv_corr_data[fname] = {
-                        factor_names[fj]: [] for fj in range(n_f) if fj != fi
-                    }
-                for fj in range(n_f):
-                    if fi == fj:
-                        continue
-                    fv_corr_data[fname][factor_names[fj]].append(
-                        round(float(corr_mat[fi, fj]), 6)
-                    )
-            # Annualized covariance: upper triangle + diagonal
-            Sf_ann = Sf * 252
-            for fi in range(n_f):
-                fv_cov_data[f"Var({factor_names[fi]})"].append(
-                    round(float(Sf_ann[fi, fi]), 8)
+            fname = factor_names[fi]
+            fv_corr_data[fname] = {}
+            for fj in range(n_f):
+                if fi == fj:
+                    continue
+                fv_corr_data[fname][factor_names[fj]] = _safe_list(
+                    np.round(corr_all[:, fi, fj], 6)
                 )
-                for fj in range(fi + 1, n_f):
-                    fv_cov_data[f"Cov({factor_names[fi]}, {factor_names[fj]})"].append(
-                        round(float(Sf_ann[fi, fj]), 8)
-                    )
+
+        # Build cov_data dict (annualized)
+        cov_ann = cov_all * 252
+        fv_cov_data: dict[str, list] = {}
+        for fi in range(n_f):
+            fv_cov_data[f"Var({factor_names[fi]})"] = _safe_list(
+                np.round(cov_ann[:, fi, fi], 8)
+            )
+            for fj in range(fi + 1, n_f):
+                fv_cov_data[f"Cov({factor_names[fi]}, {factor_names[fj]})"] = _safe_list(
+                    np.round(cov_ann[:, fi, fj], 8)
+                )
 
         factor_vol_ts = {
             "factors": factor_names,
