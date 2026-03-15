@@ -235,7 +235,7 @@
 
     <section class="report-grid report-grid--spaced">
       {# ---- Factor Risk (Volatility / Correlation / Covariance / Loadings) ---- #}
-      {% if results.factor_vol_ts or results.beta_heatmap or results.factor_corr_heatmap or results.factor_cov_heatmap %}
+      {% if results.has_factor_risk %}
         <div class="span-12">
           <div class="card chart-panel">
             <div class="card-body p-4 p-lg-5">
@@ -258,7 +258,7 @@
       {% endif %}
 
       {# ---- Unified Model Backtesting Section ---- #}
-      {% if results.agg_vol_backtest or results.per_asset_vol or results.per_asset_corr or results.per_asset_conf %}
+      {% if results.has_backtest %}
         <div class="span-12">
           <div class="card chart-panel">
             <div class="card-body p-4 p-lg-5">
@@ -269,6 +269,7 @@
                   <select class="form-select" id="backtestMetric">
                     <option value="volatility">Volatility</option>
                     <option value="correlation">Correlation</option>
+                    <option value="covariance">Covariance</option>
                     <option value="returns">Returns &amp; Residuals</option>
                   </select>
                 </div>
@@ -312,15 +313,34 @@
 
     <script src="https://cdn.plot.ly/plotly-2.35.0.min.js" crossorigin="anonymous"></script>
     <script>
-      const betaHeatmap = {{ results.beta_heatmap | tojson }};
-      const factorCorrHeatmap = {{ results.factor_corr_heatmap | tojson }};
-      const factorCovHeatmap = {{ results.factor_cov_heatmap | tojson }};
-      const aggVolBacktest = {{ results.agg_vol_backtest | tojson }};
-      const perAssetVolData = {{ results.per_asset_vol | tojson }};
-      const perAssetConfData = {{ results.per_asset_conf | tojson }};
-      const perAssetCorrData = {{ results.per_asset_corr | tojson }};
-      const pairwiseCorrData = {{ results.pairwise_corr | tojson }};
-      const factorVolData = {{ results.factor_vol_ts | tojson }};
+      /* ---- Lazy-loaded data (fetched on demand) ---- */
+      const RUN_ID = {{ run_id | tojson }};
+      const CHART_DATA_URL = '{{ url_for("factor.factor_chart_data", section="__SECTION__") }}';
+
+      let betaHeatmap = null;
+      let factorCorrHeatmap = null;
+      let factorCovHeatmap = null;
+      let factorVolData = null;
+      let aggVolBacktest = null;
+      let perAssetVolData = null;
+      let perAssetConfData = null;
+      let perAssetCorrData = null;
+      let pairwiseCorrData = null;
+      let perAssetCovData = null;
+      let pairwiseCovData = null;
+
+      const _fetchCache = {};
+      function fetchChartSection(section, sub) {
+        const cacheKey = sub ? section + ':' + sub : section;
+        if (_fetchCache[cacheKey]) return _fetchCache[cacheKey];
+        let url = CHART_DATA_URL.replace('__SECTION__', section) + '?run_id=' + encodeURIComponent(RUN_ID);
+        if (sub) url += '&sub=' + encodeURIComponent(sub);
+        _fetchCache[cacheKey] = fetch(url).then(function(r) {
+          if (!r.ok) throw new Error('Chart data request failed');
+          return r.json();
+        });
+        return _fetchCache[cacheKey];
+      }
 
       const baseLayout = {
         margin: { t: 40, r: 20, b: 60, l: 60 },
@@ -374,7 +394,7 @@
       })();
 
       /* ============================================================
-         FACTOR RISK SECTION
+         FACTOR RISK SECTION (lazy-loaded)
          ============================================================ */
       (function() {
         const modeSel = document.getElementById('factorRiskMode');
@@ -384,7 +404,12 @@
         const chartEl = document.getElementById('factorRiskChart');
         if (!modeSel || !chartEl) return;
 
-        if (factorVolData) {
+        let factorRiskLoaded = false;
+        let factorSelectorPopulated = false;
+
+        function populateFactorSelector() {
+          if (factorSelectorPopulated || !factorVolData) return;
+          factorSelectorPopulated = true;
           factorVolData.factors.forEach(function(f, i) {
             const opt = document.createElement('option');
             opt.value = f; opt.textContent = f;
@@ -393,7 +418,8 @@
           });
         }
 
-        function renderFactorRisk() {
+        function renderFactorRiskInner() {
+          populateFactorSelector();
           const mode = modeSel.value;
           const isHeatmap = mode === 'loadings';
 
@@ -461,13 +487,28 @@
           }
         }
 
+        function renderFactorRisk() {
+          if (factorRiskLoaded) { renderFactorRiskInner(); return; }
+          descEl.textContent = 'Loading chart data\u2026';
+          fetchChartSection('factor_risk').then(function(data) {
+            betaHeatmap = data.beta_heatmap;
+            factorCorrHeatmap = data.factor_corr_heatmap;
+            factorCovHeatmap = data.factor_cov_heatmap;
+            factorVolData = data.factor_vol_ts;
+            factorRiskLoaded = true;
+            renderFactorRiskInner();
+          }).catch(function() {
+            descEl.textContent = 'Failed to load chart data. Please re-run the analysis.';
+          });
+        }
+
         modeSel.addEventListener('change', renderFactorRisk);
         factorSel.addEventListener('change', renderFactorRisk);
         renderFactorRisk();
       })();
 
       /* ============================================================
-         UNIFIED BACKTESTING SECTION
+         UNIFIED BACKTESTING SECTION (lazy-loaded)
          ============================================================ */
       (function() {
         const el = document.getElementById('backtestChart');
@@ -487,13 +528,21 @@
         const corrPairGroup = document.getElementById('corrPairAssetGroup');
         const returnsViewGroup = document.getElementById('returnsViewGroup');
 
-        const assets = (perAssetVolData && perAssetVolData.assets) || (perAssetCorrData && perAssetCorrData.assets) || (perAssetConfData && perAssetConfData.assets) || [];
-        assets.forEach(function(a, i) {
-          const opt = document.createElement('option');
-          opt.value = a; opt.textContent = a;
-          if (i === 0) opt.selected = true;
-          assetSel.appendChild(opt);
-        });
+        /* Per-metric lazy loading handled by _metricLoaded in renderBacktest */
+        let assetDropdownPopulated = false;
+        let assets = [];
+
+        function populateAssetDropdown() {
+          if (assetDropdownPopulated) return;
+          assetDropdownPopulated = true;
+          assets = (perAssetVolData && perAssetVolData.assets) || (perAssetCorrData && perAssetCorrData.assets) || (perAssetConfData && perAssetConfData.assets) || [];
+          assets.forEach(function(a, i) {
+            const opt = document.createElement('option');
+            opt.value = a; opt.textContent = a;
+            if (i === 0) opt.selected = true;
+            assetSel.appendChild(opt);
+          });
+        }
 
         function updateCorrPairDropdown() {
           const current = assetSel.value;
@@ -519,24 +568,39 @@
             scopeGroup.style.display = '';
             assetGroup.style.display = scope === 'asset' ? '' : 'none';
           }
-          const showCorrCompare = metric === 'correlation' && (scopeSel.value === 'asset');
+          const showCorrCompare = (metric === 'correlation' || metric === 'covariance') && (scopeSel.value === 'asset');
           corrCompareGroup.style.display = showCorrCompare ? '' : 'none';
           const showPairSel = showCorrCompare && corrCompareSel.value === 'pairwise';
           corrPairGroup.style.display = showPairSel ? '' : 'none';
           returnsViewGroup.style.display = metric === 'returns' ? '' : 'none';
         }
 
-        function addTrainEndLine(traces, trainEnd, yRange) {
+        function addTrainEndLine(traces, layout, trainEnd, yRange) {
           if (!trainEnd) return;
-          traces.push({
-            type: 'scatter', mode: 'lines', name: 'Train end',
-            x: [trainEnd, trainEnd], y: yRange,
-            line: { color: COL.identity, width: 1.2, dash: 'dash' },
-            hoverinfo: 'skip', showlegend: true,
-          });
+          if (yRange) {
+            traces.push({
+              type: 'scatter', mode: 'lines', name: 'Train end',
+              x: [trainEnd, trainEnd], y: yRange,
+              line: { color: COL.identity, width: 1.2, dash: 'dash' },
+              hoverinfo: 'skip', showlegend: true,
+            });
+          } else {
+            layout.shapes = (layout.shapes || []).concat([{
+              type: 'line', xref: 'x', yref: 'paper',
+              x0: trainEnd, x1: trainEnd, y0: 0, y1: 1,
+              line: { color: COL.identity, width: 1.2, dash: 'dash' },
+            }]);
+            traces.push({
+              type: 'scatter', mode: 'lines', name: 'Train end',
+              x: [null], y: [null],
+              line: { color: COL.identity, width: 1.2, dash: 'dash' },
+              hoverinfo: 'skip', showlegend: true,
+            });
+          }
         }
 
-        function renderBacktest() {
+        function renderBacktestInner() {
+          populateAssetDropdown();
           updateControls();
           const metric = metricSel.value;
           const scope = scopeSel.value;
@@ -554,7 +618,7 @@
                   hovertemplate: '<b>' + s.name + '</b><br>%{x|%m/%d/%y}<br>%{y:.1%}<extra></extra>',
                 });
               });
-              addTrainEndLine(traces, aggVolBacktest.train_end, [0, 1]);
+              addTrainEndLine(traces, layout, aggVolBacktest.train_end, [0, 1]);
               descEl.textContent = 'Cross-sectional average of model-predicted conditional volatility vs trailing realized volatility.';
               layout.yaxis = { ...layout.yaxis, title: 'Annualized volatility', tickformat: '.1%' };
             } else {
@@ -568,7 +632,7 @@
                   line: { color: COL.realized, width: 1.4 },
                   hovertemplate: '<b>Trailing</b><br>%{x|%m/%d/%y}<br>%{y:.1%}<extra></extra>' },
               ];
-              addTrainEndLine(traces, perAssetVolData.train_end, [0, 1]);
+              addTrainEndLine(traces, layout, perAssetVolData.train_end, [0, 1]);
               descEl.textContent = 'Model-predicted vs trailing realized volatility for ' + asset + '.';
               layout.yaxis = { ...layout.yaxis, title: 'Annualized volatility', tickformat: '.1%' };
             }
@@ -596,7 +660,7 @@
                   line: { color: COL.realized, width: 1.6 },
                   hovertemplate: '<b>Trailing (avg)</b><br>%{x|%m/%d/%y}<br>%{y:.3f}<extra></extra>' },
               ];
-              addTrainEndLine(traces, perAssetCorrData.train_end, [-1, 1]);
+              addTrainEndLine(traces, layout, perAssetCorrData.train_end, [-1, 1]);
               descEl.textContent = 'Average predicted vs trailing correlation across all assets.';
               layout.yaxis = { ...layout.yaxis, title: 'Correlation' };
             } else {
@@ -617,7 +681,7 @@
                     line: { color: COL.realized, width: 1.4 },
                     hovertemplate: '<b>Trailing</b><br>%{x|%m/%d/%y}<br>%{y:.3f}<extra></extra>' },
                 ];
-                addTrainEndLine(traces, pairwiseCorrData.train_end, [-1, 1]);
+                addTrainEndLine(traces, layout, pairwiseCorrData.train_end, [-1, 1]);
                 descEl.textContent = 'Predicted vs trailing pairwise correlation between ' + asset + ' and ' + other + '.';
               } else {
                 if (!perAssetCorrData || !perAssetCorrData.data[asset]) { Plotly.react(el, [], layout, plotCfg); return; }
@@ -630,11 +694,77 @@
                     line: { color: COL.realized, width: 1.4 },
                     hovertemplate: '<b>Trailing</b><br>%{x|%m/%d/%y}<br>%{y:.3f}<extra></extra>' },
                 ];
-                addTrainEndLine(traces, perAssetCorrData.train_end, [-1, 1]);
+                addTrainEndLine(traces, layout, perAssetCorrData.train_end, [-1, 1]);
                 descEl.textContent = 'Predicted vs trailing correlation between ' + asset + ' and an equal-weighted aggregate of all industries.';
               }
               layout.yaxis = { ...layout.yaxis, title: 'Correlation' };
             }
+
+          /* ---- COVARIANCE ---- */
+          } else if (metric === 'covariance') {
+            if (scope === 'aggregate') {
+              if (!perAssetCovData || !perAssetCovData.data) { Plotly.react(el, [], layout, plotCfg); return; }
+              const allAssets = Object.keys(perAssetCovData.data);
+              if (allAssets.length === 0) { Plotly.react(el, [], layout, plotCfg); return; }
+              const nDates = perAssetCovData.data[allAssets[0]].pred.length;
+              const avgPred = new Array(nDates).fill(0);
+              const avgReal = new Array(nDates).fill(0);
+              allAssets.forEach(function(a) {
+                const ad = perAssetCovData.data[a];
+                for (let i = 0; i < nDates; i++) {
+                  avgPred[i] += (ad.pred[i] || 0) / allAssets.length;
+                  avgReal[i] += (ad.real[i] || 0) / allAssets.length;
+                }
+              });
+              const dates = perAssetCovData.data[allAssets[0]].x;
+              traces = [
+                { type: 'scatter', mode: 'lines', name: 'Predicted (avg)', x: dates, y: avgPred,
+                  line: { color: COL.forecast, width: 1.6 },
+                  hovertemplate: '<b>Predicted (avg)</b><br>%{x|%m/%d/%y}<br>%{y:.6f}<extra></extra>' },
+                { type: 'scatter', mode: 'lines', name: 'Trailing (avg)', x: dates, y: avgReal,
+                  line: { color: COL.realized, width: 1.6 },
+                  hovertemplate: '<b>Trailing (avg)</b><br>%{x|%m/%d/%y}<br>%{y:.6f}<extra></extra>' },
+              ];
+              addTrainEndLine(traces, layout, perAssetCovData.train_end, null);
+              descEl.textContent = 'Average predicted vs trailing covariance (with equal-weighted portfolio) across all assets.';
+              layout.yaxis = { ...layout.yaxis, title: 'Covariance' };
+            } else {
+              const compareMode = corrCompareSel.value;
+              if (compareMode === 'pairwise') {
+                const other = corrPairSel.value;
+                if (!other || other === asset || !pairwiseCovData || !pairwiseCovData.pairs) {
+                  Plotly.react(el, [], layout, plotCfg); return;
+                }
+                const key = [asset, other].sort().join('|');
+                const d = pairwiseCovData.pairs[key];
+                if (!d) { Plotly.react(el, [], layout, plotCfg); return; }
+                traces = [
+                  { type: 'scatter', mode: 'lines', name: 'Predicted', x: d.x, y: d.pred,
+                    line: { color: COL.forecast, width: 1.4 },
+                    hovertemplate: '<b>Predicted</b><br>%{x|%m/%d/%y}<br>%{y:.6f}<extra></extra>' },
+                  { type: 'scatter', mode: 'lines', name: 'Trailing', x: d.x, y: d.real,
+                    line: { color: COL.realized, width: 1.4 },
+                    hovertemplate: '<b>Trailing</b><br>%{x|%m/%d/%y}<br>%{y:.6f}<extra></extra>' },
+                ];
+                addTrainEndLine(traces, layout, pairwiseCovData.train_end, null);
+                descEl.textContent = 'Predicted vs trailing pairwise covariance between ' + asset + ' and ' + other + '.';
+              } else {
+                if (!perAssetCovData || !perAssetCovData.data[asset]) { Plotly.react(el, [], layout, plotCfg); return; }
+                const d = perAssetCovData.data[asset];
+                traces = [
+                  { type: 'scatter', mode: 'lines', name: 'Predicted', x: d.x, y: d.pred,
+                    line: { color: COL.forecast, width: 1.4 },
+                    hovertemplate: '<b>Predicted</b><br>%{x|%m/%d/%y}<br>%{y:.6f}<extra></extra>' },
+                  { type: 'scatter', mode: 'lines', name: 'Trailing', x: d.x, y: d.real,
+                    line: { color: COL.realized, width: 1.4 },
+                    hovertemplate: '<b>Trailing</b><br>%{x|%m/%d/%y}<br>%{y:.6f}<extra></extra>' },
+                ];
+                addTrainEndLine(traces, layout, perAssetCovData.train_end, null);
+                descEl.textContent = 'Predicted vs trailing covariance between ' + asset + ' and an equal-weighted aggregate of all industries.';
+              }
+              layout.yaxis = { ...layout.yaxis, title: 'Covariance' };
+            }
+
           } else if (metric === 'returns') {
             if (!perAssetConfData || !perAssetConfData.data[asset]) { Plotly.react(el, [], layout, plotCfg); return; }
             const d = perAssetConfData.data[asset];
@@ -645,8 +775,23 @@
                   line: { color: COL.ret, width: 0.9 },
                   hovertemplate: '<b>Excess return</b><br>%{x|%b %d, %Y}<br>%{y:.2%}<extra></extra>' },
               ];
+              if (d.upper_2s && d.lower_2s) {
+                traces.push(
+                  { type: 'scatter', mode: 'lines', name: '+2\u03c3 band',
+                    x: d.x, y: d.upper_2s,
+                    line: { color: COL.forecast, width: 0 },
+                    showlegend: false, hoverinfo: 'skip' },
+                  { type: 'scatter', mode: 'lines', name: '\u00b12\u03c3 band',
+                    x: d.x, y: d.lower_2s,
+                    line: { color: COL.forecast, width: 0 },
+                    fill: 'tonexty',
+                    fillcolor: 'rgba(230, 57, 70, 0.12)',
+                    hoverinfo: 'skip' }
+                );
+              }
               layout.yaxis = { ...layout.yaxis, title: 'Daily return', tickformat: '.2%' };
-              descEl.textContent = 'Total excess returns for ' + asset + '.';
+              descEl.textContent = 'Total excess returns for ' + asset
+                + (d.upper_2s ? '. Shaded band shows \u00b12\u03c3 from the model\u2019s conditional volatility forecast.' : '.');
             } else {
               var xFull = d.x;
               traces = [
@@ -672,6 +817,35 @@
           Plotly.react(el, traces, layout, plotCfg);
         }
 
+        const _metricLoaded = {};
+        function _applyBacktestSub(metric, data) {
+          if (metric === 'volatility') {
+            aggVolBacktest = data.agg_vol_backtest;
+            perAssetVolData = data.per_asset_vol;
+          } else if (metric === 'returns') {
+            perAssetConfData = data.per_asset_conf;
+          } else if (metric === 'correlation') {
+            perAssetCorrData = data.per_asset_corr;
+            pairwiseCorrData = data.pairwise_corr;
+          } else if (metric === 'covariance') {
+            perAssetCovData = data.per_asset_cov;
+            pairwiseCovData = data.pairwise_cov;
+          }
+        }
+
+        function renderBacktest() {
+          const metric = metricSel.value;
+          if (_metricLoaded[metric]) { renderBacktestInner(); return; }
+          descEl.textContent = 'Loading chart data\u2026';
+          fetchChartSection('backtest', metric).then(function(data) {
+            _applyBacktestSub(metric, data);
+            _metricLoaded[metric] = true;
+            renderBacktestInner();
+          }).catch(function() {
+            descEl.textContent = 'Failed to load chart data. Please re-run the analysis.';
+          });
+        }
+
         metricSel.addEventListener('change', renderBacktest);
         scopeSel.addEventListener('change', renderBacktest);
         assetSel.addEventListener('change', function() { updateCorrPairDropdown(); renderBacktest(); });
@@ -679,7 +853,6 @@
         corrPairSel.addEventListener('change', renderBacktest);
         returnsViewSel.addEventListener('change', renderBacktest);
 
-        updateCorrPairDropdown();
         renderBacktest();
       })();
     </script>
