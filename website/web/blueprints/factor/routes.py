@@ -6,7 +6,9 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from flask import Blueprint, current_app, flash, redirect, render_template, request, url_for
+import uuid
+
+from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, url_for
 
 from toolkit.analysis.factor_analysis import (
     FactorModel,
@@ -102,8 +104,30 @@ def _thin(n: int, max_points: int = 2500) -> int:
     return max(1, n // max_points)
 
 
+# ---------------------------------------------------------------------------
+# Run cache — holds FactorRun objects so AJAX endpoints can build chart data
+# on demand without re-serializing everything into the initial HTML payload.
+# ---------------------------------------------------------------------------
+_run_cache: dict[str, FactorRun] = {}
+_MAX_CACHED_RUNS = 4
+
+
+def _cache_run(run: FactorRun) -> str:
+    """Store *run* and return a cache key.  Evicts oldest if full."""
+    run_id = uuid.uuid4().hex[:12]
+    if len(_run_cache) >= _MAX_CACHED_RUNS:
+        _run_cache.pop(next(iter(_run_cache)), None)
+    _run_cache[run_id] = run
+    return run_id
+
+
 def _summarize_factor_run(run: FactorRun) -> dict:
-    """Build all Plotly JSON payloads from a FactorRun."""
+    """Build *lightweight* metadata payload for initial page load.
+
+    Heavy chart data (factor vol TS, backtesting series, pairwise data) is
+    NOT included — the frontend fetches it lazily via the ``/chart-data``
+    AJAX endpoint.
+    """
     meta = run.meta
     ev = run.results.get("evaluation")
 
@@ -121,7 +145,6 @@ def _summarize_factor_run(run: FactorRun) -> dict:
     if r2_series is not None and not r2_series.empty:
         for asset in r2_series.index:
             row = {"asset": str(asset), "r2": _safe_float(r2_series.loc[asset])}
-            # Total vol (annualized)
             total_var_daily = None
             if asset_cond_vol_df is not None and asset in asset_cond_vol_df.columns:
                 last_vol = float(asset_cond_vol_df[asset].iloc[-1])
@@ -129,7 +152,6 @@ def _summarize_factor_run(run: FactorRun) -> dict:
                 row["total_vol_ann"] = _safe_float(last_vol * float(np.sqrt(252)))
             else:
                 row["total_vol_ann"] = None
-            # Residual vol (annualized)
             resid_var_daily = None
             if resid_cond_var_df is not None and asset in resid_cond_var_df.columns:
                 resid_var_daily = float(resid_cond_var_df[asset].iloc[-1])
@@ -138,7 +160,6 @@ def _summarize_factor_run(run: FactorRun) -> dict:
                 )
             else:
                 row["resid_vol_ann"] = None
-            # Systematic vol and factor risk fraction
             if total_var_daily is not None and resid_var_daily is not None:
                 sys_var = max(total_var_daily - resid_var_daily, 0.0)
                 row["systematic_vol_ann"] = _safe_float(float(np.sqrt(sys_var * 252)))
@@ -148,7 +169,6 @@ def _summarize_factor_run(run: FactorRun) -> dict:
             else:
                 row["systematic_vol_ann"] = None
                 row["factor_risk_pct"] = None
-            # Annualized returns (log returns: annual ~ daily_mean * 252)
             if assets_excess_full is not None and asset in assets_excess_full.columns:
                 row["total_return_ann"] = _safe_float(
                     float(assets_excess_full[asset].mean()) * 252
@@ -169,7 +189,6 @@ def _summarize_factor_run(run: FactorRun) -> dict:
             else:
                 row["systematic_return_ann"] = None
                 row["residual_return_ann"] = None
-            # Jensen's alpha (annualized)
             if (
                 alpha_intercept is not None
                 and not alpha_intercept.empty
@@ -180,7 +199,6 @@ def _summarize_factor_run(run: FactorRun) -> dict:
                 )
             else:
                 row["alpha_ann"] = None
-            # Residual Sharpe ratio
             if row.get("residual_return_ann") is not None and row.get("resid_vol_ann"):
                 row["residual_sharpe"] = _safe_float(
                     row["residual_return_ann"] / row["resid_vol_ann"]
@@ -193,12 +211,41 @@ def _summarize_factor_run(run: FactorRun) -> dict:
     train_end = None
     if isinstance(ev, dict):
         train_end = ev.get("params", {}).get("train_end")
-
     train_end_str = (
         train_end.strftime("%Y-%m-%d") if hasattr(train_end, "strftime") else None
     )
 
-    # --- Beta heatmap ---
+    # --- Capability flags (tell the template which chart sections to render) ---
+    has_factor_risk = (
+        run.results.get("pc_cond_var") is not None
+        or run.results.get("beta_loadings") is not None
+    )
+    has_backtest = isinstance(ev, dict) and bool(ev.get("timeseries"))
+
+    return {
+        "meta": meta_payload,
+        "asset_metrics": asset_metrics,
+        "train_end": train_end_str,
+        "has_factor_risk": has_factor_risk,
+        "has_backtest": has_backtest,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Per-section chart data builders (called lazily via AJAX)
+# ---------------------------------------------------------------------------
+
+def _build_factor_risk_data(run: FactorRun) -> dict:
+    """Build factor risk chart payloads (beta heatmap, factor vol TS, etc.)."""
+    ev = run.results.get("evaluation")
+    train_end = None
+    if isinstance(ev, dict):
+        train_end = ev.get("params", {}).get("train_end")
+    train_end_str = (
+        train_end.strftime("%Y-%m-%d") if hasattr(train_end, "strftime") else None
+    )
+
+    # Beta heatmap
     betas = run.results.get("betas_ordered", run.beta_loadings)
     betas_arr = betas.to_numpy(dtype=float)
     vmax = float(np.nanpercentile(np.abs(betas_arr), 98)) if np.isfinite(betas_arr).any() else 1.0
@@ -211,7 +258,7 @@ def _summarize_factor_run(run: FactorRun) -> dict:
         "zmax": round(vmax, 4),
     }
 
-    # --- Factor correlation heatmap ---
+    # Factor correlation / covariance heatmaps
     factor_cov = run.results.get("factor_cov_forecast")
     factor_corr_heatmap = None
     factor_cov_heatmap = None
@@ -221,10 +268,8 @@ def _summarize_factor_run(run: FactorRun) -> dict:
             "z": _safe_nested_list(corr.to_numpy(dtype=float).round(4)),
             "x": [str(c) for c in corr.columns],
             "y": [str(r) for r in corr.index],
-            "zmin": -1,
-            "zmax": 1,
+            "zmin": -1, "zmax": 1,
         }
-        # Annualized factor covariance heatmap (daily cov * 252)
         cov_ann = factor_cov.to_numpy(dtype=float) * 252
         factor_cov_heatmap = {
             "z": _safe_nested_list(np.round(cov_ann, 6)),
@@ -232,40 +277,34 @@ def _summarize_factor_run(run: FactorRun) -> dict:
             "y": [str(r) for r in factor_cov.index],
         }
 
-    # --- Factor volatility timeseries ---
+    # Factor volatility timeseries
     factor_vol_ts = None
     pc_cond_var = run.results.get("pc_cond_var")
     eigen_vectors = run.results.get("eigen_vectors")
     if pc_cond_var is not None and eigen_vectors is not None:
-        ev_mat = eigen_vectors.to_numpy(dtype=float)       # (K, P)
+        ev_mat = eigen_vectors.to_numpy(dtype=float)
         fv_idx = pc_cond_var.index
         fv_dates = _dates_to_strings(fv_idx)
         factor_names = [str(f) for f in eigen_vectors.index]
         n_f = len(factor_names)
 
-        # Vectorized vol: diag(V @ diag(h) @ V') = V^2 @ h  ->  (T, K)
         V_sq = ev_mat ** 2
-        h_pc_arr = pc_cond_var.to_numpy(dtype=float)       # (T, P)
-        factor_var = h_pc_arr @ V_sq.T                      # (T, K)
+        h_pc_arr = pc_cond_var.to_numpy(dtype=float)
+        factor_var = h_pc_arr @ V_sq.T
         factor_vol = np.sqrt(np.clip(factor_var, 0, None)) * float(np.sqrt(252))
 
         fv_vol_data = {}
         for i, fname in enumerate(factor_names):
             fv_vol_data[fname] = _safe_list(np.round(factor_vol[:, i], 6))
 
-        # Vectorized correlation + covariance: Sf(t) = V @ diag(h_t) @ V'
-        # Full cov matrix per t:  cov[t] = (V * h[t]) @ V'  ->  (T, K, K)
-        h_clipped = np.clip(h_pc_arr, 0.0, None)           # (T, P)
-        Vh = ev_mat[np.newaxis, :, :] * h_clipped[:, np.newaxis, :]  # (T, K, P)
-        cov_all = np.einsum("tkp,jp->tkj", Vh, ev_mat)     # (T, K, K)
-        # Symmetry guard
+        h_clipped = np.clip(h_pc_arr, 0.0, None)
+        Vh = ev_mat[np.newaxis, :, :] * h_clipped[:, np.newaxis, :]
+        cov_all = np.einsum("tkp,jp->tkj", Vh, ev_mat)
         cov_all = 0.5 * (cov_all + np.swapaxes(cov_all, 1, 2))
-        # Correlation: corr[i,j] = cov[i,j] / sqrt(cov[i,i] * cov[j,j])
-        diag_vol = np.sqrt(np.clip(np.diagonal(cov_all, axis1=1, axis2=2), 1e-30, None))  # (T, K)
-        denom = diag_vol[:, :, np.newaxis] * diag_vol[:, np.newaxis, :]  # (T, K, K)
+        diag_vol = np.sqrt(np.clip(np.diagonal(cov_all, axis1=1, axis2=2), 1e-30, None))
+        denom = diag_vol[:, :, np.newaxis] * diag_vol[:, np.newaxis, :]
         corr_all = np.clip(cov_all / denom, -1.0, 1.0)
 
-        # Build corr_data dict
         fv_corr_data: dict[str, dict[str, list]] = {}
         for fi in range(n_f):
             fname = factor_names[fi]
@@ -277,7 +316,6 @@ def _summarize_factor_run(run: FactorRun) -> dict:
                     np.round(corr_all[:, fi, fj], 6)
                 )
 
-        # Build cov_data dict (annualized)
         cov_ann = cov_all * 252
         fv_cov_data: dict[str, list] = {}
         for fi in range(n_f):
@@ -298,17 +336,42 @@ def _summarize_factor_run(run: FactorRun) -> dict:
             "train_end": train_end_str,
         }
 
-    # --- Evaluation timeseries-based charts ---
-    agg_vol_backtest = None
-    per_asset_vol = None
-    per_asset_conf = None
-    per_asset_corr = None
-    pairwise_corr = None
+    return {
+        "beta_heatmap": beta_heatmap,
+        "factor_corr_heatmap": factor_corr_heatmap,
+        "factor_cov_heatmap": factor_cov_heatmap,
+        "factor_vol_ts": factor_vol_ts,
+    }
 
-    if isinstance(ev, dict):
-        ts = ev.get("timeseries", {})
 
-        # Aggregate vol backtest
+def _build_backtest_data(run: FactorRun, *, sub: str | None = None) -> dict:
+    """Build backtesting chart payloads.
+
+    When *sub* is given, only the requested metric is built:
+      ``"volatility"`` — agg_vol_backtest + per_asset_vol
+      ``"correlation"`` — per_asset_corr + pairwise_corr
+      ``"covariance"``  — per_asset_cov + pairwise_cov
+      ``"returns"``     — per_asset_conf (std residuals + total returns)
+    When *sub* is ``None``, everything is built (backward-compat).
+    """
+    ev = run.results.get("evaluation")
+    if not isinstance(ev, dict):
+        return {}
+
+    train_end = ev.get("params", {}).get("train_end")
+    train_end_str = (
+        train_end.strftime("%Y-%m-%d") if hasattr(train_end, "strftime") else None
+    )
+    ts = ev.get("timeseries", {})
+
+    result: dict = {}
+    build_all = sub is None
+
+    # --- VOLATILITY ---
+    if build_all or sub == "volatility":
+        agg_vol_backtest = None
+        per_asset_vol = None
+
         pred_avg = ts.get("pred_avg_vol_ann", pd.Series(dtype=float))
         real_avg = ts.get("real_avg_vol_ann", pd.Series(dtype=float))
         if not pred_avg.empty and not real_avg.empty:
@@ -323,7 +386,6 @@ def _summarize_factor_run(run: FactorRun) -> dict:
                 "train_end": train_end_str,
             }
 
-        # Per-asset vol backtest
         pred_vol = ts.get("pred_vol", pd.DataFrame())
         real_vol = ts.get("real_vol", pd.DataFrame())
         if not pred_vol.empty and not real_vol.empty:
@@ -345,10 +407,16 @@ def _summarize_factor_run(run: FactorRun) -> dict:
                 "data": pa_vol_data,
             }
 
-        # Per-asset standardized residuals
+        result["agg_vol_backtest"] = agg_vol_backtest
+        result["per_asset_vol"] = per_asset_vol
+
+    # --- RETURNS / RESIDUALS ---
+    if build_all or sub == "returns":
+        per_asset_conf = None
         resid = run.results.get("resid", pd.DataFrame())
         resid_cond_var_ev = run.results.get("resid_cond_var", pd.DataFrame())
         assets_excess_df = run.results.get("assets_excess")
+        asset_cond_vol_df = run.results.get("asset_cond_vol")
         if not resid.empty and not resid_cond_var_ev.empty:
             assets = [str(c) for c in resid.columns]
             pa_conf_data = {}
@@ -358,10 +426,8 @@ def _summarize_factor_run(run: FactorRun) -> dict:
                 cidx = r.index.intersection(s.index)
                 r = r.loc[cidx]
                 s = s.loc[cidx]
-                # Standardized residual: r / sigma
                 std_resid = (r / s.replace(0.0, np.nan)).fillna(0.0)
                 cdates = _dates_to_strings(cidx)
-                # Compute % within ±2σ and ±3σ
                 n_obs = len(std_resid)
                 pct_in_2s = float((std_resid.abs() <= 2.0).sum() / n_obs) if n_obs else 0.0
                 pct_in_3s = float((std_resid.abs() <= 3.0).sum() / n_obs) if n_obs else 0.0
@@ -371,20 +437,31 @@ def _summarize_factor_run(run: FactorRun) -> dict:
                     "pct_in_2s": round(pct_in_2s * 100, 1),
                     "pct_in_3s": round(pct_in_3s * 100, 1),
                 }
-                # Total excess returns (raw, for the total returns view)
                 if (
                     assets_excess_df is not None
                     and asset in assets_excess_df.columns
                 ):
                     ar = assets_excess_df[asset].astype(float).reindex(cidx)
                     entry["asset_returns"] = _safe_list(ar.round(6))
+                if (
+                    asset_cond_vol_df is not None
+                    and asset in asset_cond_vol_df.columns
+                ):
+                    cond_vol = asset_cond_vol_df[asset].astype(float).reindex(cidx)
+                    entry["upper_2s"] = _safe_list((2.0 * cond_vol).round(6))
+                    entry["lower_2s"] = _safe_list((-2.0 * cond_vol).round(6))
                 pa_conf_data[asset] = entry
             per_asset_conf = {
                 "assets": assets,
                 "data": pa_conf_data,
             }
+        result["per_asset_conf"] = per_asset_conf
 
-        # Per-asset correlation backtest (vs aggregate)
+    # --- CORRELATION ---
+    if build_all or sub == "correlation":
+        per_asset_corr = None
+        pairwise_corr = None
+
         pred_corr_agg = ts.get("pred_corr_to_agg", pd.DataFrame())
         real_corr_agg = ts.get("real_corr_to_agg", pd.DataFrame())
         if not pred_corr_agg.empty and not real_corr_agg.empty:
@@ -404,12 +481,10 @@ def _summarize_factor_run(run: FactorRun) -> dict:
                 "data": pa_corr_data,
             }
 
-        # Pairwise correlation backtest
         pred_pw = ts.get("pred_corr_pairwise", {})
         real_pw = ts.get("real_corr_pairwise", {})
         if pred_pw and real_pw:
             pw_pairs = {}
-            # Use dates from one arbitrary pair to build the shared index
             sample_key = next(iter(pred_pw))
             pw_idx = pred_pw[sample_key].index
             pw_dates = _dates_to_strings(pw_idx)
@@ -426,20 +501,81 @@ def _summarize_factor_run(run: FactorRun) -> dict:
                 "train_end": train_end_str,
             }
 
-    return {
-        "meta": meta_payload,
-        "asset_metrics": asset_metrics,
-        "train_end": train_end_str,
-        "beta_heatmap": beta_heatmap,
-        "factor_corr_heatmap": factor_corr_heatmap,
-        "factor_cov_heatmap": factor_cov_heatmap,
-        "factor_vol_ts": factor_vol_ts,
-        "agg_vol_backtest": agg_vol_backtest,
-        "per_asset_vol": per_asset_vol,
-        "per_asset_conf": per_asset_conf,
-        "per_asset_corr": per_asset_corr,
-        "pairwise_corr": pairwise_corr,
-    }
+        result["per_asset_corr"] = per_asset_corr
+        result["pairwise_corr"] = pairwise_corr
+
+    # --- COVARIANCE ---
+    if build_all or sub == "covariance":
+        per_asset_cov = None
+        pairwise_cov = None
+
+        pred_cov_agg_df = ts.get("pred_cov_to_agg", pd.DataFrame())
+        real_cov_agg_df = ts.get("real_cov_to_agg", pd.DataFrame())
+        if not pred_cov_agg_df.empty and not real_cov_agg_df.empty:
+            assets = [str(c) for c in pred_cov_agg_df.columns]
+            cov_idx = pred_cov_agg_df.index.intersection(real_cov_agg_df.index)
+            cov_dates = _dates_to_strings(cov_idx)
+            pa_cov_data = {}
+            for asset in assets:
+                pa_cov_data[asset] = {
+                    "x": cov_dates,
+                    "pred": _safe_list(pred_cov_agg_df.loc[cov_idx, asset].round(8)),
+                    "real": _safe_list(real_cov_agg_df.loc[cov_idx, asset].round(8)),
+                }
+            per_asset_cov = {
+                "assets": assets,
+                "train_end": train_end_str,
+                "data": pa_cov_data,
+            }
+
+        pred_cov_pw = ts.get("pred_cov_pairwise", {})
+        real_cov_pw = ts.get("real_cov_pairwise", {})
+        if pred_cov_pw and real_cov_pw:
+            cov_pw_pairs = {}
+            sample_key = next(iter(pred_cov_pw))
+            cov_pw_idx = pred_cov_pw[sample_key].index
+            cov_pw_dates = _dates_to_strings(cov_pw_idx)
+            for key in pred_cov_pw:
+                if key not in real_cov_pw:
+                    continue
+                cov_pw_pairs[key] = {
+                    "x": cov_pw_dates,
+                    "pred": _safe_list(pred_cov_pw[key].loc[cov_pw_idx].round(8)),
+                    "real": _safe_list(real_cov_pw[key].loc[cov_pw_idx].round(8)),
+                }
+            pairwise_cov = {
+                "pairs": cov_pw_pairs,
+                "train_end": train_end_str,
+            }
+
+        result["per_asset_cov"] = per_asset_cov
+        result["pairwise_cov"] = pairwise_cov
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# AJAX endpoint — lazily serve chart data for a cached run
+# ---------------------------------------------------------------------------
+
+@factor_bp.route("/factor-analysis/chart-data/<section>")
+def factor_chart_data(section: str):
+    """Return JSON chart payload for *section* (``factor_risk`` or ``backtest``).
+
+    Query-string must include ``run_id`` matching a key in ``_run_cache``.
+    """
+    run_id = request.args.get("run_id", "")
+    run = _run_cache.get(run_id)
+    if run is None:
+        return jsonify({"error": "Run not found or expired. Please re-run the analysis."}), 404
+
+    if section == "factor_risk":
+        return jsonify(_build_factor_risk_data(run))
+    elif section == "backtest":
+        sub = request.args.get("sub", "")
+        return jsonify(_build_backtest_data(run, sub=sub or None))
+    else:
+        return jsonify({"error": f"Unknown section: {section}"}), 400
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +585,7 @@ def _summarize_factor_run(run: FactorRun) -> dict:
 @factor_bp.route("/factor-analysis", methods=["GET", "POST"])
 def factor_analysis():
     results: Optional[dict] = None
+    run_id: Optional[str] = None
 
     params = request.values
     selected_universe = (params.get("universe") or "10").strip()
@@ -473,6 +610,7 @@ def factor_analysis():
             if default_path.exists():
                 snap = load_factor_snapshot(default_path)
                 results = _summarize_factor_run(snap.run)
+                run_id = _cache_run(snap.run)
                 selected_universe = str(snap.universe)
                 garch_dist = snap.garch_dist or garch_dist
                 factor_set = snap.factor_set or factor_set
@@ -543,6 +681,7 @@ def factor_analysis():
                     progress=False,
                 )
                 results = _summarize_factor_run(run)
+                run_id = _cache_run(run)
 
                 if save_name_value:
                     try:
@@ -584,6 +723,7 @@ def factor_analysis():
     return render_template(
         "factor_analysis.html",
         results=results,
+        run_id=run_id,
         universes=SUPPORTED_INDUSTRY_UNIVERSES,
         selected_universe=selected_universe,
         start_year_value=start_year_display,
@@ -600,8 +740,6 @@ def factor_analysis():
 
 @factor_bp.route("/factor-analysis/saved", methods=["GET"])
 def saved_factor_analysis():
-    results: Optional[dict] = None
-    snapshot_meta: Optional[dict] = None
     selected_key = (request.args.get("run") or "").strip()
     saved_runs = []
 
@@ -610,25 +748,7 @@ def saved_factor_analysis():
         saved_runs = list_factor_snapshots(results_dir)
 
         if selected_key:
-            snapshot = load_factor_snapshot(snapshot_path(results_dir, selected_key))
-            results = _summarize_factor_run(snapshot.run)
-            snapshot_meta = {
-                "name": snapshot.name,
-                "created_at": snapshot.created_at.strftime("%Y-%m-%d %H:%M"),
-                "universe": snapshot.universe,
-                "weighting": snapshot.weighting,
-                "factor_set": snapshot.factor_set,
-                "start_date": (
-                    snapshot.start_date.strftime("%Y-%m-%d") if snapshot.start_date else None
-                ),
-                "end_date": (
-                    snapshot.end_date.strftime("%Y-%m-%d") if snapshot.end_date else None
-                ),
-                "garch_dist": snapshot.garch_dist,
-                "pca_demean": snapshot.pca_demean,
-                "train_fraction": snapshot.train_fraction,
-                "realized_window": snapshot.realized_window,
-            }
+            return redirect(url_for("factor.view_saved_factor_analysis", run_key=selected_key))
     except FileNotFoundError:
         flash("Saved factor run not found.", "warning")
     except Exception:
@@ -638,8 +758,6 @@ def saved_factor_analysis():
         "factor_analysis_saved.html",
         saved_runs=saved_runs,
         selected_key=selected_key,
-        snapshot_meta=snapshot_meta,
-        results=results,
     )
 
 
@@ -655,16 +773,42 @@ def view_saved_factor_analysis(run_key: str):
         flash("Unable to load the saved run right now.", "danger")
         return redirect(url_for("factor.saved_factor_analysis"))
 
-    params = {
-        "universe": snapshot.universe,
-        "start_year": snapshot.start_date.year if snapshot.start_date else None,
-        "garch_dist": snapshot.garch_dist,
-        "factor_set": snapshot.factor_set,
-        "train_fraction": snapshot.train_fraction,
-        "realized_window": snapshot.realized_window,
-    }
-    params = {k: v for k, v in params.items() if v is not None}
-    return redirect(url_for("factor.factor_analysis", **params))
+    run = snapshot.run
+    results = _summarize_factor_run(run)
+    run_id = _cache_run(run)
+
+    current_year = date.today().year
+    earliest_start_year = current_year
+    start_year_value = ""
+    if snapshot.start_date:
+        start_year_value = str(snapshot.start_date.year)
+
+    try:
+        earliest_start = get_universe_start_date_cached(
+            snapshot.universe,
+            snapshot.weighting,
+            factor_set=snapshot.factor_set,
+        )
+        earliest_start_year = earliest_start.year
+    except Exception:
+        pass
+
+    return render_template(
+        "factor_analysis.html",
+        results=results,
+        run_id=run_id,
+        universes=SUPPORTED_INDUSTRY_UNIVERSES,
+        selected_universe=str(snapshot.universe),
+        start_year_value=start_year_value,
+        garch_dist=snapshot.garch_dist or "t",
+        factor_set=snapshot.factor_set or "ff3",
+        train_fraction_value=str(snapshot.train_fraction),
+        realized_window_value=str(snapshot.realized_window),
+        save_name_value="",
+        save_overwrite=False,
+        earliest_start_year=earliest_start_year,
+        current_year=current_year,
+    )
 
 
 @factor_bp.route("/factor-analysis/saved/<run_key>/delete", methods=["POST"])
