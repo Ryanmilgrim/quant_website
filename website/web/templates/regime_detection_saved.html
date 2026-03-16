@@ -1,0 +1,62 @@
+{% extends 'base.html' %}
+
+{% block content %}
+  <section class="section-header">
+    <span class="section-number">04</span>
+    <div class="section-text">
+      <p class="section-kicker">Econometric features</p>
+      <h2 class="section-title">Saved Regime Collections</h2>
+      <p class="section-lede">Load or manage previously saved regime detection collections.</p>
+    </div>
+    <div class="section-rule"></div>
+  </section>
+
+  <section class="report-grid report-grid--spaced">
+    <div class="span-12">
+      <div class="card report-card">
+        <div class="card-body">
+          <h5 class="card-title">Saved Collections</h5>
+          {% if collections %}
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">Saved</th>
+                    <th scope="col">Regimes</th>
+                    <th scope="col">Regime Names</th>
+                    <th scope="col" class="text-end">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for coll in collections %}
+                    <tr>
+                      <th scope="row">{{ coll.name }}</th>
+                      <td>{{ coll.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                      <td>{{ coll.n_regimes }}</td>
+                      <td>{{ coll.regime_names | join(', ') }}</td>
+                      <td class="text-end">
+                        <form method="post" action="{{ url_for('regime.load_saved_collection', key=coll.key) }}" class="d-inline">
+                          <button class="btn btn-sm btn-outline-secondary" type="submit">Load</button>
+                        </form>
+                        <form method="post" action="{{ url_for('regime.delete_saved_collection', key=coll.key) }}" class="d-inline">
+                          <input type="hidden" name="confirm" value="1">
+                          <button class="btn btn-sm btn-outline-danger" type="submit">Delete</button>
+                        </form>
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="text-muted mb-0">No saved collections yet. Build a collection and save it from the main page.</p>
+          {% endif %}
+          <div class="mt-3">
+            <a class="btn btn-outline-secondary" href="{{ url_for('regime.regime_detection') }}">Back to builder</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+{% endblock %}

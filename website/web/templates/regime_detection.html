@@ -1,0 +1,819 @@
+{% extends 'base.html' %}
+
+{% block content %}
+  <section class="section-header">
+    <span class="section-number">04</span>
+    <div class="section-text">
+      <p class="section-kicker">Econometric features</p>
+      <h2 class="section-title">Regime Detection</h2>
+      <p class="section-lede">Build a collection of Markov Switching regimes from FRED economic time series. Each regime produces soft probabilities for downstream ML models.</p>
+      <p class="section-note">Fit regimes iteratively, inspect results, and save the combined endogenous data.</p>
+    </div>
+    <div class="section-rule"></div>
+  </section>
+
+  {# ── Fit Regime Form ── #}
+  <section class="report-grid report-grid--spaced">
+    <div class="span-12">
+      <div class="card report-card">
+        <div class="card-body">
+          <h5 class="card-title">Fit Regime</h5>
+
+          {# Preset loader #}
+          {% if presets %}
+            <div class="mb-3">
+              <label class="form-label small text-muted" for="preset_select">Load from preset</label>
+              <div class="d-flex gap-2">
+                <select class="form-select form-select-sm" id="preset_select" style="max-width: 300px;">
+                  <option value="">-- Select preset --</option>
+                  {% for p in presets %}
+                    <option value="{{ p.name }}"
+                            data-fred="{{ p.config.fred_series_id }}"
+                            data-transform="{{ p.config.transform.transform.value }}"
+                            data-window="{{ p.config.transform.window }}"
+                            data-k="{{ p.config.k_regimes }}"
+                            data-sv="{{ p.config.switching_variance | lower }}"
+                            data-st="{{ p.config.switching_trend | lower }}"
+                            data-te="{{ p.config.train_end or '' }}"
+                            data-desc="{{ p.config.description }}">
+                      {{ p.name }} ({{ p.config.fred_series_id }})
+                    </option>
+                  {% endfor %}
+                </select>
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="loadPresetBtn">Apply</button>
+              </div>
+            </div>
+          {% endif %}
+
+          <form method="post" action="{{ url_for('regime.fit_regime') }}" class="app-form">
+            <div class="row g-3">
+              <div class="col-md-4">
+                <label class="form-label" for="regime_name">Regime name</label>
+                <input type="text" class="form-control" id="regime_name" name="regime_name" placeholder="GDP Recession" required>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label" for="fred_series_id">FRED series ID</label>
+                <input type="text" class="form-control" id="fred_series_id" name="fred_series_id" placeholder="GDP" required>
+                <p class="form-text" id="fred_hint"></p>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label" for="train_end">Training cutoff</label>
+                <input type="date" class="form-control" id="train_end" name="train_end">
+                <p class="form-text">Leave blank for full-sample fit.</p>
+              </div>
+              <div class="col-md-3">
+                <label class="form-label" for="transform_type">Transform</label>
+                <select class="form-select" id="transform_type" name="transform_type">
+                  {% for val, label in transform_types %}
+                    <option value="{{ val }}">{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-md-2" id="window_section">
+                <label class="form-label" for="transform_window">Window</label>
+                <input type="number" class="form-control" id="transform_window" name="transform_window" value="4" min="1" max="52">
+              </div>
+              <div class="col-md-2">
+                <label class="form-label" for="k_regimes">Regimes</label>
+                <select class="form-select" id="k_regimes" name="k_regimes">
+                  {% for k in [2, 3, 4, 5] %}
+                    <option value="{{ k }}" {% if k == 2 %}selected{% endif %}>{{ k }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-md-2">
+                <div class="form-check mt-4">
+                  <input class="form-check-input" type="checkbox" id="switching_variance" name="switching_variance" checked>
+                  <label class="form-check-label" for="switching_variance">Switching var</label>
+                </div>
+              </div>
+              <div class="col-md-2">
+                <div class="form-check mt-4">
+                  <input class="form-check-input" type="checkbox" id="switching_trend" name="switching_trend" checked>
+                  <label class="form-check-label" for="switching_trend">Switching trend</label>
+                </div>
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="description">Description (optional)</label>
+                <input type="text" class="form-control" id="description" name="description" placeholder="Brief description of this regime">
+              </div>
+              <div class="col-12 d-flex flex-column flex-sm-row gap-2">
+                <button class="btn btn-primary" type="submit">Fit regime</button>
+                <button class="btn btn-outline-secondary" type="button" id="previewBtn">Preview</button>
+                <a class="btn btn-outline-secondary" href="{{ url_for('regime.saved_collections') }}">Saved collections</a>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {# ── Preview section (populated by AJAX) ── #}
+  <div id="previewSection" style="display:none">
+    <section class="report-grid report-grid--spaced">
+      <div class="span-12">
+        <div class="card report-card">
+          <div class="card-body">
+            <h5 class="card-title">Preview</h5>
+            <div id="previewLoading" class="text-muted">Fitting model...</div>
+            <div id="previewError" class="text-danger" style="display:none"></div>
+            <div id="previewResults" style="display:none">
+              <div id="previewDualChart" class="chart-container mb-4"></div>
+              <div id="previewProbChart" class="chart-container mb-4"></div>
+              {# Preview regression stats #}
+              <div id="previewRegStats" style="display:none">
+                <h6>Regression Summary</h6>
+                <div class="row">
+                  <div class="col-md-7">
+                    <div class="table-responsive">
+                      <table class="table table-sm mb-2" id="previewStatsTable">
+                        <thead><tr><th>Parameter</th><th>Coef</th><th>Std Err</th><th>t-stat</th><th>P-value</th></tr></thead>
+                        <tbody></tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <div class="col-md-5">
+                    <table class="table table-sm mb-2" id="previewRegimeTable">
+                      <thead><tr><th>Regime</th><th>Mean</th><th>Variance</th><th>E[Duration]</th></tr></thead>
+                      <tbody></tbody>
+                    </table>
+                    <div id="previewTransChart" class="chart-container" style="height: 250px;"></div>
+                  </div>
+                </div>
+                <p class="text-muted small mb-0" id="previewMetrics"></p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  {# ── Current Collection ── #}
+  {% if entries_table %}
+    <section class="report-grid report-grid--spaced">
+      <div class="span-12">
+        <div class="card report-card">
+          <div class="card-body">
+            <h5 class="card-title">Current Collection ({{ entries_table | length }} regime{{ 's' if entries_table | length != 1 }})</h5>
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">FRED ID</th>
+                    <th scope="col">Regimes</th>
+                    <th scope="col">Start</th>
+                    <th scope="col">Frequency</th>
+                    <th scope="col">Obs</th>
+                    <th scope="col">Missing</th>
+                    <th scope="col" class="text-end">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for entry in entries_table %}
+                    <tr>
+                      <th scope="row">{{ entry.name }}</th>
+                      <td>{{ entry.fred_series_id }}</td>
+                      <td>{{ entry.k_regimes }}</td>
+                      <td>{{ entry.start_date }}</td>
+                      <td>{{ entry.frequency }}</td>
+                      <td>{{ entry.n_obs }}</td>
+                      <td>{{ entry.missing_obs }}</td>
+                      <td class="text-end">
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('regime.regime_detection', view=entry.name) }}">View</a>
+                        <form method="post" action="{{ url_for('regime.remove_regime', name=entry.name) }}" class="d-inline">
+                          <button class="btn btn-sm btn-outline-danger" type="submit">Remove</button>
+                        </form>
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+
+            {# Collapsible transform/model details #}
+            <details class="mt-3">
+              <summary class="small text-muted" style="cursor: pointer;">Transform &amp; model details</summary>
+              <div class="table-responsive mt-2">
+                <table class="table table-sm align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th scope="col">Name</th>
+                      <th scope="col">Transform</th>
+                      <th scope="col">Train End</th>
+                      <th scope="col">Switching Var</th>
+                      <th scope="col">Switching Trend</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for entry in entries_table %}
+                      <tr>
+                        <th scope="row">{{ entry.name }}</th>
+                        <td>{{ entry.transform }}</td>
+                        <td>{{ entry.train_end }}</td>
+                        <td>{{ 'Yes' if entry.switching_variance else 'No' }}</td>
+                        <td>{{ 'Yes' if entry.switching_trend else 'No' }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+
+            {# Save / Clear controls #}
+            <div class="mt-3 d-flex flex-column flex-sm-row gap-2 align-items-start">
+              <form method="post" action="{{ url_for('regime.save_collection_route') }}" class="d-flex gap-2 align-items-end">
+                <div>
+                  <input type="text" class="form-control form-control-sm" name="collection_name" placeholder="Collection name" required style="min-width: 200px;">
+                </div>
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" id="overwrite" name="overwrite">
+                  <label class="form-check-label small" for="overwrite">Overwrite</label>
+                </div>
+                <button class="btn btn-sm btn-primary" type="submit">Save collection</button>
+              </form>
+              <form method="post" action="{{ url_for('regime.clear_collection') }}" class="d-inline">
+                <button class="btn btn-sm btn-outline-danger" type="submit">Clear all</button>
+              </form>
+            </div>
+
+            {# Save preset from existing regime #}
+            {% if entries_table %}
+              <div class="mt-3 border-top pt-3">
+                <p class="small text-muted mb-2">Save a regime config as a reusable preset:</p>
+                <form method="post" action="{{ url_for('regime.save_preset_route') }}" class="d-flex gap-2 align-items-end flex-wrap">
+                  <select class="form-select form-select-sm" name="regime_name" style="max-width: 200px;">
+                    {% for entry in entries_table %}
+                      <option value="{{ entry.name }}">{{ entry.name }}</option>
+                    {% endfor %}
+                  </select>
+                  <input type="text" class="form-control form-control-sm" name="preset_name" placeholder="Preset name" style="max-width: 200px;">
+                  <button class="btn btn-sm btn-outline-secondary" type="submit">Save as preset</button>
+                </form>
+              </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </section>
+  {% endif %}
+
+  {# ── Regime Viewer (toggle through individual regimes) ── #}
+  {% if coll_summary and coll_summary.individual_summaries %}
+    <section class="report-grid report-grid--spaced">
+      <div class="span-12">
+        <div class="card chart-panel">
+          <div class="card-body p-4 p-lg-5">
+            <div class="d-flex align-items-center gap-3 mb-3">
+              <h5 class="card-title mb-0">Regime Probabilities</h5>
+              <select class="form-select form-select-sm" id="regimeToggle" style="max-width: 250px;">
+                {% for name in coll_summary.collection_info.regime_names %}
+                  <option value="{{ name }}">{{ name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div id="toggleDualChart" class="chart-container mb-3"></div>
+            <div id="toggleProbChart" class="chart-container"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  {% endif %}
+
+  {# ── Individual Regime Detail (if viewing one) ── #}
+  {% if detail_summary %}
+    <section class="report-grid report-grid--spaced">
+      <div class="span-5">
+        <div class="card report-card">
+          <div class="card-body">
+            <h5 class="card-title">{{ detail_config.name }}</h5>
+            <table class="table table-sm mb-0">
+              <tbody>
+                <tr><th scope="row">FRED ID</th><td>{{ detail_config.fred_series_id }}</td></tr>
+                <tr><th scope="row">Regimes</th><td>{{ detail_config.k_regimes }}</td></tr>
+                {% if detail_config.train_end %}
+                  <tr><th scope="row">Train End</th><td>{{ detail_config.train_end }}</td></tr>
+                {% endif %}
+                {% if detail_config.description %}
+                  <tr><th scope="row">Description</th><td>{{ detail_config.description }}</td></tr>
+                {% endif %}
+              </tbody>
+            </table>
+            <details class="mt-2">
+              <summary class="small text-muted" style="cursor: pointer;">Transform details</summary>
+              <table class="table table-sm mb-0 mt-1">
+                <tbody>
+                  <tr><th scope="row">Transform</th><td>{{ detail_config.transform.description }}</td></tr>
+                  <tr><th scope="row">Switching Var</th><td>{{ 'Yes' if detail_config.switching_variance else 'No' }}</td></tr>
+                  <tr><th scope="row">Switching Trend</th><td>{{ 'Yes' if detail_config.switching_trend else 'No' }}</td></tr>
+                </tbody>
+              </table>
+            </details>
+          </div>
+        </div>
+      </div>
+      <div class="span-7">
+        <div class="card report-card">
+          <div class="card-body">
+            <h5 class="card-title">Regime Parameters</h5>
+            {% if detail_summary.regime_table %}
+              <table class="table table-sm mb-0">
+                <thead>
+                  <tr>
+                    <th scope="col">Regime</th>
+                    <th scope="col">Label</th>
+                    <th scope="col">Mean</th>
+                    <th scope="col">Variance</th>
+                    <th scope="col">E[Duration]</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in detail_summary.regime_table %}
+                    <tr>
+                      <td>{{ row.regime }}</td>
+                      <td>{{ row.label or '&mdash;' }}</td>
+                      <td>{{ '%.4f' | format(row.mean) }}</td>
+                      <td>{{ '%.4f' | format(row.variance) }}</td>
+                      <td>{{ '%.1f' | format(row.expected_duration) }} periods</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            {% endif %}
+            {% if detail_summary.metrics %}
+              <p class="text-muted small mt-2 mb-0">
+                AIC: {{ '%.2f' | format(detail_summary.metrics.aic) }} &middot;
+                BIC: {{ '%.2f' | format(detail_summary.metrics.bic) }} &middot;
+                Log-L: {{ '%.2f' | format(detail_summary.metrics.log_likelihood) }}
+                {% if detail_summary.metrics.converged %} &middot; Converged{% endif %}
+              </p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    {# Regression statistics table #}
+    {% if detail_summary.regression_stats %}
+      <section class="report-grid report-grid--spaced">
+        <div class="span-12">
+          <div class="card report-card">
+            <div class="card-body">
+              <h5 class="card-title">Regression Summary</h5>
+              <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th scope="col">Parameter</th>
+                      <th scope="col">Coefficient</th>
+                      <th scope="col">Std Error</th>
+                      <th scope="col">t-statistic</th>
+                      <th scope="col">P-value</th>
+                      <th scope="col">Sig</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for stat in detail_summary.regression_stats %}
+                      <tr>
+                        <td><code>{{ stat.name }}</code></td>
+                        <td>{{ '%.6f' | format(stat.coef) }}</td>
+                        <td>{{ '%.6f' | format(stat.std_err) if stat.std_err is defined else '&mdash;' }}</td>
+                        <td>{{ '%.4f' | format(stat.t_stat) if stat.t_stat is defined else '&mdash;' }}</td>
+                        <td>{{ '%.6f' | format(stat.pvalue) if stat.pvalue is defined else '&mdash;' }}</td>
+                        <td>
+                          {% if stat.significant is defined %}
+                            {% if stat.significant %}
+                              <span class="text-success">***</span>
+                            {% else %}
+                              <span class="text-muted">&mdash;</span>
+                            {% endif %}
+                          {% endif %}
+                        </td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    {% endif %}
+
+    {# Detail charts #}
+    <section class="report-grid report-grid--spaced">
+      {% if detail_summary.chart_dual_axis or detail_summary.chart_series %}
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <div id="detailDualChart" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+      {% if detail_summary.chart_probabilities %}
+        <div class="span-12">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <div id="detailProbChart" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+      {% if detail_summary.transition_matrix %}
+        <div class="span-6">
+          <div class="card chart-panel">
+            <div class="card-body p-4 p-lg-5">
+              <h5 class="card-title">Transition matrix</h5>
+              <div id="detailTransChart" class="chart-container"></div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  {# ── Plotly rendering ── #}
+  {% if (coll_summary and coll_summary.individual_summaries) or detail_summary %}
+    <script src="https://cdn.plot.ly/plotly-2.35.0.min.js" crossorigin="anonymous"></script>
+  {% endif %}
+
+  <script>
+    const REGIME_COLORS = ['#2c9bac', '#e63946', '#457b9d', '#f4a261', '#264653',
+                           '#6a994e', '#bc4749', '#a68a64', '#344e41', '#9b2226'];
+
+    const baseLayout = {
+      margin: { t: 40, r: 20, b: 60, l: 60 },
+      font: { family: 'Source Sans 3, Segoe UI, Tahoma, sans-serif', color: '#001f38' },
+      paper_bgcolor: 'rgba(0, 0, 0, 0)',
+      plot_bgcolor: '#ffffff',
+      xaxis: {
+        tickformat: "'%y", automargin: true, showline: true,
+        linecolor: '#d8dadb', linewidth: 1,
+        gridcolor: 'rgba(216, 218, 219, 0.4)',
+        tickfont: { color: '#667d89' }, titlefont: { color: '#001f38' },
+        zeroline: false, title: '',
+      },
+      yaxis: {
+        automargin: true, showline: true, linecolor: '#d8dadb', linewidth: 1,
+        gridcolor: 'rgba(216, 218, 219, 0.4)',
+        tickfont: { color: '#667d89' }, titlefont: { color: '#001f38' },
+        zeroline: false,
+      },
+      legend: { x: 0.01, y: 0.99, xanchor: 'left', yanchor: 'top', bgcolor: 'rgba(0,0,0,0)' },
+      showlegend: true,
+      hovermode: 'closest',
+      hoverlabel: { font: { color: '#001f38' } },
+    };
+    const plotCfg = { displaylogo: false, responsive: true };
+
+    function renderStackedProbs(elementId, chartData, trainEndDate, title) {
+      if (!chartData || !chartData.series || !chartData.series.length) return;
+      const traces = chartData.series.map((s, i) => ({
+        type: 'scatter', mode: 'lines', name: s.name,
+        x: s.x, y: s.y, stackgroup: 'one',
+        line: { width: 0.5, color: REGIME_COLORS[i % REGIME_COLORS.length] },
+        fillcolor: REGIME_COLORS[i % REGIME_COLORS.length] + '80',
+        hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:.1f}%<extra></extra>',
+      }));
+      const shapes = [];
+      if (trainEndDate) {
+        shapes.push({
+          type: 'line', xref: 'x', yref: 'paper',
+          x0: trainEndDate, x1: trainEndDate, y0: 0, y1: 1,
+          line: { color: '#e63946', width: 2, dash: 'dash' },
+        });
+      }
+      const chartTitle = title || chartData.title || '';
+      Plotly.newPlot(elementId, traces, {
+        ...baseLayout, shapes,
+        title: chartTitle ? { text: chartTitle, font: { size: 14, color: '#001f38' }, x: 0.01 } : undefined,
+        yaxis: { ...baseLayout.yaxis, title: 'Probability (%)', tickformat: '.0f', ticksuffix: '%', range: [0, 100] },
+      }, plotCfg);
+    }
+
+    function renderDualAxis(elementId, dualData, assignments, trainEndDate) {
+      /* Renders raw series on left y-axis and transformed on right y-axis.
+         If no dual data, falls back to single series chart. */
+      if (!dualData) return;
+
+      const traces = [];
+      const shapes = [];
+
+      // Raw series on left axis
+      traces.push({
+        type: 'scatter', mode: 'lines', name: dualData.raw.name,
+        x: dualData.raw.x, y: dualData.raw.y,
+        line: { color: '#001f38', width: 1.5 },
+        yaxis: 'y',
+        hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:,.4f}<extra></extra>',
+      });
+
+      // Transformed series on right axis
+      traces.push({
+        type: 'scatter', mode: 'lines', name: dualData.transformed.name,
+        x: dualData.transformed.x, y: dualData.transformed.y,
+        line: { color: '#2c9bac', width: 1.5, dash: 'dot' },
+        yaxis: 'y2',
+        hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:,.4f}<extra></extra>',
+      });
+
+      // Regime background shading
+      if (assignments && assignments.regimes && assignments.regimes.length > 1) {
+        let prev = assignments.regimes[0], start = assignments.x[0];
+        for (let i = 1; i <= assignments.regimes.length; i++) {
+          const curr = i < assignments.regimes.length ? assignments.regimes[i] : -1;
+          if (curr !== prev) {
+            const endX = i < assignments.x.length ? assignments.x[i] : assignments.x[assignments.x.length - 1];
+            shapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: start, x1: endX, y0: 0, y1: 1,
+              fillcolor: REGIME_COLORS[prev % REGIME_COLORS.length] + '20', line: { width: 0 }, layer: 'below' });
+            start = i < assignments.x.length ? assignments.x[i] : endX;
+            prev = curr;
+          }
+        }
+      }
+
+      if (trainEndDate) {
+        shapes.push({
+          type: 'line', xref: 'x', yref: 'paper',
+          x0: trainEndDate, x1: trainEndDate, y0: 0, y1: 1,
+          line: { color: '#e63946', width: 2, dash: 'dash' },
+        });
+      }
+
+      const title = dualData.title || '';
+      Plotly.newPlot(elementId, traces, {
+        ...baseLayout, shapes,
+        title: title ? { text: title, font: { size: 14, color: '#001f38' }, x: 0.01 } : undefined,
+        margin: { t: 50, r: 60, b: 60, l: 60 },
+        yaxis: { ...baseLayout.yaxis, title: dualData.raw.name, side: 'left' },
+        yaxis2: {
+          ...baseLayout.yaxis, title: 'Transformed', side: 'right',
+          overlaying: 'y', showgrid: false,
+          titlefont: { color: '#2c9bac' }, tickfont: { color: '#2c9bac' },
+        },
+        showlegend: true,
+      }, plotCfg);
+    }
+
+    function renderSeriesWithOverlay(elementId, chartData, assignments, trainEndDate) {
+      if (!chartData || !chartData.series || !chartData.series.length || !assignments) return;
+      const sd = chartData.series[0];
+      const shapes = [];
+      if (assignments.regimes && assignments.regimes.length > 1) {
+        let prev = assignments.regimes[0], start = assignments.x[0];
+        for (let i = 1; i <= assignments.regimes.length; i++) {
+          const curr = i < assignments.regimes.length ? assignments.regimes[i] : -1;
+          if (curr !== prev) {
+            const endX = i < assignments.x.length ? assignments.x[i] : assignments.x[assignments.x.length - 1];
+            shapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: start, x1: endX, y0: 0, y1: 1,
+              fillcolor: REGIME_COLORS[prev % REGIME_COLORS.length] + '20', line: { width: 0 }, layer: 'below' });
+            start = i < assignments.x.length ? assignments.x[i] : endX;
+            prev = curr;
+          }
+        }
+      }
+      if (trainEndDate) {
+        shapes.push({
+          type: 'line', xref: 'x', yref: 'paper',
+          x0: trainEndDate, x1: trainEndDate, y0: 0, y1: 1,
+          line: { color: '#e63946', width: 2, dash: 'dash' },
+        });
+      }
+      const title = chartData.title || '';
+      Plotly.newPlot(elementId, [{
+        type: 'scatter', mode: 'lines', name: sd.name, x: sd.x, y: sd.y,
+        line: { color: '#001f38', width: 1.5 },
+        hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:,.4f}<extra></extra>',
+      }], {
+        ...baseLayout, shapes,
+        title: title ? { text: title, font: { size: 14, color: '#001f38' }, x: 0.01 } : undefined,
+        yaxis: { ...baseLayout.yaxis, title: '' },
+        showlegend: false,
+      }, plotCfg);
+    }
+
+    function renderHeatmap(elementId, transMatrix) {
+      if (!transMatrix || !transMatrix.values || !transMatrix.values.length) return;
+      const k = transMatrix.labels.length;
+      const ann = [];
+      for (let i = 0; i < k; i++)
+        for (let j = 0; j < k; j++)
+          ann.push({ x: j, y: i, text: transMatrix.values[i][j].toFixed(3),
+            font: { color: transMatrix.values[i][j] > 0.6 ? '#fff' : '#001f38', size: 14 }, showarrow: false });
+      Plotly.newPlot(elementId, [{
+        type: 'heatmap', z: transMatrix.values, x: transMatrix.labels, y: transMatrix.labels,
+        colorscale: [[0,'#fff'],[0.25,'#d4eef2'],[0.5,'#6abcc5'],[0.75,'#2c9bac'],[1,'#001f38']],
+        zmin: 0, zmax: 1, showscale: false,
+        hovertemplate: 'From: %{y}<br>To: %{x}<br>P: %{z:.4f}<extra></extra>',
+      }], {
+        ...baseLayout, annotations: ann,
+        xaxis: { ...baseLayout.xaxis, title: 'To', tickformat: '' },
+        yaxis: { ...baseLayout.yaxis, title: 'From', autorange: 'reversed' },
+        showlegend: false, margin: { t: 40, r: 20, b: 80, l: 100 },
+      }, plotCfg);
+    }
+
+    /* ── Regime toggle viewer ── */
+    {% if coll_summary and coll_summary.individual_summaries %}
+      const allSummaries = {{ coll_summary.individual_summaries | tojson }};
+      const regimeToggle = document.getElementById('regimeToggle');
+
+      function showRegime(name) {
+        const data = allSummaries[name];
+        if (!data) return;
+        const te = data.train_end_marker ? data.train_end_marker.date : null;
+
+        if (data.chart_dual_axis) {
+          document.getElementById('toggleDualChart').style.display = '';
+          renderDualAxis('toggleDualChart', data.chart_dual_axis, data.regime_assignments, te);
+        } else {
+          document.getElementById('toggleDualChart').style.display = '';
+          renderSeriesWithOverlay('toggleDualChart', data.chart_series, data.regime_assignments, te);
+        }
+        renderStackedProbs('toggleProbChart', data.chart_probabilities, te, name);
+      }
+
+      if (regimeToggle) {
+        regimeToggle.addEventListener('change', function () { showRegime(this.value); });
+        showRegime(regimeToggle.value);
+      }
+    {% endif %}
+
+    /* ── Detail charts ── */
+    {% if detail_summary %}
+      const detailData = {{ detail_summary | tojson }};
+      const trainEnd = detailData.train_end_marker ? detailData.train_end_marker.date : null;
+
+      if (detailData.chart_dual_axis) {
+        renderDualAxis('detailDualChart', detailData.chart_dual_axis, detailData.regime_assignments, trainEnd);
+      } else {
+        renderSeriesWithOverlay('detailDualChart', detailData.chart_series, detailData.regime_assignments, trainEnd);
+      }
+      renderStackedProbs('detailProbChart', detailData.chart_probabilities, trainEnd, detailData.metrics.series_name);
+      renderHeatmap('detailTransChart', detailData.transition_matrix);
+    {% endif %}
+
+    /* ── Show/hide window input ── */
+    const transformSel = document.getElementById('transform_type');
+    const windowSec = document.getElementById('window_section');
+    function toggleWindow() {
+      const needsWindow = ['yoy_change', 'rolling_mean'].includes(transformSel.value);
+      windowSec.style.display = needsWindow ? '' : 'none';
+    }
+    transformSel.addEventListener('change', toggleWindow);
+    toggleWindow();
+
+    /* ── FRED series search hint ── */
+    let fredTimeout = null;
+    const fredInput = document.getElementById('fred_series_id');
+    const fredHint = document.getElementById('fred_hint');
+    fredInput.addEventListener('input', function () {
+      clearTimeout(fredTimeout);
+      const q = this.value.trim();
+      if (q.length < 2) { fredHint.textContent = ''; return; }
+      fredTimeout = setTimeout(() => {
+        fetch('{{ url_for("regime.search_fred") }}?q=' + encodeURIComponent(q))
+          .then(r => r.json())
+          .then(data => {
+            if (data.length) {
+              fredHint.textContent = data.slice(0, 3).map(d => d.id + ': ' + d.title).join(' | ');
+            } else {
+              fredHint.textContent = '';
+            }
+          })
+          .catch(() => { fredHint.textContent = ''; });
+      }, 400);
+    });
+
+    /* ── Preset loader ── */
+    const presetSel = document.getElementById('preset_select');
+    const loadPresetBtn = document.getElementById('loadPresetBtn');
+    if (presetSel && loadPresetBtn) {
+      loadPresetBtn.addEventListener('click', function () {
+        const opt = presetSel.options[presetSel.selectedIndex];
+        if (!opt.value) return;
+        document.getElementById('fred_series_id').value = opt.dataset.fred || '';
+        document.getElementById('transform_type').value = opt.dataset.transform || 'none';
+        document.getElementById('transform_window').value = opt.dataset.window || '4';
+        document.getElementById('k_regimes').value = opt.dataset.k || '2';
+        document.getElementById('switching_variance').checked = opt.dataset.sv === 'true';
+        document.getElementById('switching_trend').checked = opt.dataset.st === 'true';
+        document.getElementById('train_end').value = opt.dataset.te || '';
+        document.getElementById('description').value = opt.dataset.desc || '';
+        document.getElementById('regime_name').value = opt.value;
+        toggleWindow();
+      });
+    }
+
+    /* ── Preview button ── */
+    document.getElementById('previewBtn').addEventListener('click', function () {
+      const section = document.getElementById('previewSection');
+      const loading = document.getElementById('previewLoading');
+      const error = document.getElementById('previewError');
+      const results = document.getElementById('previewResults');
+
+      section.style.display = '';
+      loading.style.display = '';
+      error.style.display = 'none';
+      results.style.display = 'none';
+
+      const formData = new FormData();
+      formData.append('fred_series_id', document.getElementById('fred_series_id').value);
+      formData.append('transform_type', document.getElementById('transform_type').value);
+      formData.append('transform_window', document.getElementById('transform_window').value);
+      formData.append('k_regimes', document.getElementById('k_regimes').value);
+      formData.append('switching_variance', document.getElementById('switching_variance').checked ? 'true' : 'false');
+      formData.append('switching_trend', document.getElementById('switching_trend').checked ? 'true' : 'false');
+      formData.append('train_end', document.getElementById('train_end').value);
+
+      fetch('{{ url_for("regime.preview_regime") }}', { method: 'POST', body: formData })
+        .then(r => r.json())
+        .then(data => {
+          loading.style.display = 'none';
+          if (data.error) {
+            error.textContent = data.error;
+            error.style.display = '';
+            return;
+          }
+          results.style.display = '';
+          if (typeof Plotly === 'undefined') {
+            const s = document.createElement('script');
+            s.src = 'https://cdn.plot.ly/plotly-2.35.0.min.js';
+            s.onload = () => renderPreview(data);
+            document.head.appendChild(s);
+          } else {
+            renderPreview(data);
+          }
+        })
+        .catch(err => {
+          loading.style.display = 'none';
+          error.textContent = 'Request failed: ' + err.message;
+          error.style.display = '';
+        });
+    });
+
+    function renderPreview(data) {
+      const te = data.train_end_marker ? data.train_end_marker.date : null;
+
+      // Dual-axis or single series chart
+      if (data.chart_dual_axis) {
+        renderDualAxis('previewDualChart', data.chart_dual_axis, data.regime_assignments, te);
+      } else {
+        renderSeriesWithOverlay('previewDualChart', data.chart_series, data.regime_assignments, te);
+      }
+
+      // Stacked probabilities
+      renderStackedProbs('previewProbChart', data.chart_probabilities, te, data.metrics ? data.metrics.series_name : '');
+
+      // Regression stats
+      const statsSection = document.getElementById('previewRegStats');
+      if (data.regression_stats && data.regression_stats.length) {
+        statsSection.style.display = '';
+        const tbody = document.querySelector('#previewStatsTable tbody');
+        tbody.innerHTML = '';
+        data.regression_stats.forEach(s => {
+          const sig = s.significant ? '<span class="text-success">***</span>' : '<span class="text-muted">&mdash;</span>';
+          tbody.innerHTML += `<tr>
+            <td><code>${s.name}</code></td>
+            <td>${s.coef.toFixed(6)}</td>
+            <td>${s.std_err !== undefined ? s.std_err.toFixed(6) : '&mdash;'}</td>
+            <td>${s.t_stat !== undefined ? s.t_stat.toFixed(4) : '&mdash;'}</td>
+            <td>${s.pvalue !== undefined ? s.pvalue.toFixed(6) : '&mdash;'}</td>
+          </tr>`;
+        });
+
+        // Regime table
+        if (data.regime_table) {
+          const rtbody = document.querySelector('#previewRegimeTable tbody');
+          rtbody.innerHTML = '';
+          data.regime_table.forEach(r => {
+            rtbody.innerHTML += `<tr>
+              <td>${r.regime}${r.label ? ' (' + r.label + ')' : ''}</td>
+              <td>${r.mean.toFixed(4)}</td>
+              <td>${r.variance.toFixed(4)}</td>
+              <td>${r.expected_duration ? r.expected_duration.toFixed(1) + ' periods' : '&mdash;'}</td>
+            </tr>`;
+          });
+        }
+
+        // Transition matrix
+        if (data.transition_matrix) {
+          renderHeatmap('previewTransChart', data.transition_matrix);
+        }
+
+        // Metrics line
+        if (data.metrics) {
+          const m = data.metrics;
+          document.getElementById('previewMetrics').textContent =
+            `AIC: ${m.aic} · BIC: ${m.bic} · Log-L: ${m.log_likelihood}` +
+            (m.converged ? ' · Converged' : ' · NOT converged');
+        }
+      } else {
+        statsSection.style.display = 'none';
+      }
+    }
+  </script>
+{% endblock %}
