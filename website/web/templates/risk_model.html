@@ -5,7 +5,7 @@
     <span class="section-number">06</span>
     <div class="section-text">
       <p class="section-kicker">Risk lab</p>
-      <h2 class="section-title">Factor Risk Model</h2>
+      <h2 class="section-title">Risk Model</h2>
       <p class="section-lede">Estimate a PCA-based covariance model with GARCH conditional variance and backtest it out of sample.</p>
       <p class="section-note">LassoCV selects factor exposures, PCA rotates into principal components, and GARCH(1,1) forecasts time-varying variance.</p>
     </div>
@@ -25,7 +25,7 @@
           </h5>
           <div class="collapse" id="modelOverviewCollapse">
           <div class="pt-3">
-          <p>This factor risk model decomposes asset returns into systematic factor exposures and idiosyncratic residuals, then estimates a time-varying covariance matrix using PCA and GARCH.</p>
+          <p>This risk model decomposes asset returns into systematic factor exposures and idiosyncratic residuals, then estimates a time-varying covariance matrix using PCA and GARCH.</p>
 
           <h6>Notation</h6>
           <p>Let \(N\) denote the number of assets, \(K\) the number of Fama-French factors, \(P \leq K\) the number of retained principal components, and \(T\) the sample size (trading days).</p>
@@ -46,7 +46,7 @@
           <div class="math-block">\[ r_{i,t} = \alpha_i + \boldsymbol{\beta}_i^\top \mathbf{f}_t + \varepsilon_{i,t}, \qquad i = 1, \ldots, N \]</div>
           <p>where \(\boldsymbol{\beta}_i = (\beta_{i,1}, \ldots, \beta_{i,K})^\top\) is the vector of factor loadings for asset \(i\). In matrix form for all assets simultaneously:</p>
           <div class="math-block">\[ \mathbf{r}_t = \boldsymbol{\alpha} + \mathbf{B}\,\mathbf{f}_t + \boldsymbol{\varepsilon}_t \]</div>
-          <p>Factor exposures are estimated via LassoCV for variable selection (identifying the relevant subset of factors for each asset), followed by OLS refit on the selected factors with t-statistic pruning to remove weak loadings.</p>
+          <p>Factor exposures are estimated via LassoCV for variable selection (identifying the relevant subset of factors for each asset). A Kalman filter then estimates time-varying coefficients \(\boldsymbol{\beta}_{i,t}\) and intercepts \(\alpha_{i,t}\), treating the LassoCV-selected factors as the observation matrix. The final snapshot betas are the last filtered values; the full history is available in the Time-Varying Betas chart.</p>
 
           <h6>2. PCA Rotation</h6>
           <p>To reduce dimensionality and orthogonalize the factor space, the factor return matrix is decomposed via singular value decomposition:</p>
@@ -80,7 +80,7 @@
       <div class="card report-card">
         <div class="card-body">
           <h5 class="card-title">Configuration</h5>
-          <form method="post" action="{{ url_for('factor.factor_analysis') }}" class="app-form">
+          <form method="post" action="{{ url_for('risk.risk_model') }}" class="app-form">
             <div class="row g-3">
             <div class="col-12 col-md-6 col-lg-4">
               <label class="form-label" for="universe">Industry Universe</label>
@@ -125,20 +125,21 @@
               <input class="form-control" id="start_year" name="start_year" type="number" inputmode="numeric" pattern="\d{4}" min="{{ earliest_start_year }}" max="{{ current_year }}" step="1" placeholder="YYYY" value="{{ start_year_value }}">
               <p class="form-text">Defaults to the earliest available data.</p>
             </div>
-            <div class="col-12 col-md-6">
-              <label class="form-label" for="save_name">Save Run Name (optional)</label>
-              <input class="form-control" id="save_name" name="save_name" type="text" placeholder="My factor model" value="{{ save_name_value }}">
-              <p class="form-text">Saves the full inputs + data to a local pickle.</p>
+            <div class="col-12 col-md-6 col-lg-4">
+              <label class="form-label" for="tstat_cutoff">T-Stat Cutoff</label>
+              <input type="number" class="form-control" id="tstat_cutoff" name="tstat_cutoff"
+                     value="{{ tstat_cutoff|default(4.0) }}" step="0.5" min="0" max="10">
+              <p class="form-text">Minimum t-statistic for factor retention.</p>
             </div>
-            <div class="col-12 col-md-6 d-flex align-items-end">
-              <div class="form-check">
-                <input class="form-check-input" id="save_overwrite" name="save_overwrite" type="checkbox" value="1" {% if save_overwrite %}checked{% endif %}>
-                <label class="form-check-label" for="save_overwrite">Overwrite existing saved run</label>
-              </div>
+            <div class="col-12 col-md-6 col-lg-4">
+              <label class="form-label" for="kalman_q_scale">Kalman Smoothness</label>
+              <input type="number" class="form-control" id="kalman_q_scale" name="kalman_q_scale"
+                     value="{{ kalman_q_scale|default(0.01) }}" step="0.01" min="0.01" max="10.0">
+              <p class="form-text">Lower = smoother betas, higher = more reactive. Default 0.01.</p>
             </div>
             <div class="col-12 d-flex flex-column flex-sm-row gap-2 align-items-start align-items-sm-center">
-              <button class="btn btn-primary" type="submit">Run factor model</button>
-              <a class="btn btn-outline-secondary" href="{{ url_for('factor.saved_factor_analysis') }}">Saved runs</a>
+              <button class="btn btn-primary" type="submit">Create Risk Model</button>
+              <a class="btn btn-outline-secondary" href="{{ url_for('risk.risk_model_saved') }}">Saved runs</a>
               <p class="text-muted small mb-0">Model fits ~20-60 GARCH processes; expect a short wait.</p>
             </div>
             </div>
@@ -191,6 +192,40 @@
           {% endif %}
         </div>
       </div>
+      {% if run_id %}
+      <div class="card report-card mt-3">
+        <div class="card-body p-4">
+          <h5 class="card-title">Save Risk Model</h5>
+          <form method="post" action="{{ url_for('risk.save_risk_model') }}">
+            <input type="hidden" name="run_id" value="{{ run_id }}">
+            <div class="row g-3 align-items-end">
+              <div class="col">
+                <label class="form-label" for="save_name_post">Name</label>
+                <input type="text" class="form-control" id="save_name_post" name="save_name" placeholder="My risk model" required>
+              </div>
+              <div class="col-auto pt-4">
+                <button class="btn btn-primary" type="submit">Save Risk Model</button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+      {% if confirm_overwrite %}
+      <div class="card report-card border-warning mt-3">
+          <div class="card-body p-4">
+              <h5 class="card-title">Overwrite Existing Model?</h5>
+              <p>A risk model named "{{ confirm_overwrite }}" already exists.</p>
+              <form method="post" action="{{ url_for('risk.save_risk_model') }}" class="d-inline">
+                  <input type="hidden" name="run_id" value="{{ run_id }}">
+                  <input type="hidden" name="save_name" value="{{ confirm_overwrite }}">
+                  <input type="hidden" name="save_overwrite" value="1">
+                  <button class="btn btn-warning" type="submit">Overwrite</button>
+              </form>
+              <a class="btn btn-secondary ms-2" href="{{ url_for('risk.risk_model') }}">Cancel</a>
+          </div>
+      </div>
+      {% endif %}
+      {% endif %}
     </div>
   </section>
 
@@ -283,11 +318,39 @@
                 <select class="form-select" id="factorRiskMode" style="width: auto;">
                   <option value="volatility">Volatility</option>
                   <option value="correlation">Correlation</option>
-                  <option value="loadings">Factor Loadings</option>
+                  {% if results.has_kalman_betas %}
+                    <option value="time-varying">Factor Beta</option>
+                  {% endif %}
                 </select>
                 <div id="factorRiskFactorWrapper" style="display:none;">
                   <select class="form-select" id="factorRiskFactorSelect"></select>
                 </div>
+                {# Kalman beta controls (shown only in time-varying mode) #}
+                <div id="kalmanViewModeWrapper" style="display:none;">
+                  <select class="form-select" id="kalmanViewMode" style="width: auto;">
+                    <option value="by-asset">By Asset</option>
+                    <option value="by-factor">By Factor</option>
+                  </select>
+                </div>
+                <div id="kalmanAssetWrapper" style="display:none;">
+                  <select class="form-select" id="kalmanAssetSelect"></select>
+                </div>
+                <div id="kalmanFactorWrapper" style="display:none;">
+                  <select class="form-select" id="kalmanFactorSelect"></select>
+                </div>
+                <div id="kalmanFilteredWrapper" class="form-check ms-2" style="display:none;">
+                  <input class="form-check-input" type="checkbox" id="kalmanShowFiltered" checked>
+                  <label class="form-check-label" for="kalmanShowFiltered">Show Kalman</label>
+                </div>
+                <div id="kalmanSEWrapper" class="form-check ms-2" style="display:none;">
+                  <input class="form-check-input" type="checkbox" id="kalmanShowSE" checked>
+                  <label class="form-check-label" for="kalmanShowSE">Show uncertainty</label>
+                </div>
+                <div id="kalmanRollingWrapper" class="form-check ms-2" style="display:none;">
+                  <input class="form-check-input" type="checkbox" id="kalmanShowRolling">
+                  <label class="form-check-label" for="kalmanShowRolling">Show rolling OLS</label>
+                </div>
+                <div id="kalmanCheckboxContainer" class="d-flex flex-wrap gap-2 ms-2" style="display:none;"></div>
               </div>
               <p class="card-subtitle text-muted small mb-3" id="factorRiskDesc"></p>
               <div id="factorRiskChart" class="chart-container"></div>
@@ -338,7 +401,8 @@
                   <label class="backtest-label" for="returnsView">View</label>
                   <select class="form-select" id="returnsView">
                     <option value="total">Total Returns</option>
-                    <option value="residual">Residuals</option>
+                    <option value="std_residual">Standardized Residual</option>
+                    <option value="residual">Residual</option>
                   </select>
                 </div>
               </div>
@@ -354,7 +418,7 @@
     <script>
       /* ---- Lazy-loaded data (fetched on demand) ---- */
       const RUN_ID = {{ run_id | tojson }};
-      const CHART_DATA_URL = '{{ url_for("factor.factor_chart_data", section="__SECTION__") }}';
+      const CHART_DATA_URL = '{{ url_for("risk.risk_chart_data", section="__SECTION__") }}';
 
       /* Mutable data slots — populated by fetch */
       let betaHeatmap = null;
@@ -368,6 +432,7 @@
       let pairwiseCorrData = null;
       let perAssetCovData = null;
       let pairwiseCovData = null;
+      let kalmanBetaData = null;
 
       /* Fetch helpers */
       const _fetchCache = {};
@@ -488,8 +553,26 @@
         const chartEl = document.getElementById('factorRiskChart');
         if (!modeSel || !chartEl) return;
 
+        /* Kalman controls */
+        const kalmanViewModeSel = document.getElementById('kalmanViewMode');
+        const kalmanAssetSel = document.getElementById('kalmanAssetSelect');
+        const kalmanFactorSel = document.getElementById('kalmanFactorSelect');
+        const kalmanShowFiltered = document.getElementById('kalmanShowFiltered');
+        const kalmanShowSE = document.getElementById('kalmanShowSE');
+        const kalmanViewModeWrapper = document.getElementById('kalmanViewModeWrapper');
+        const kalmanAssetWrapper = document.getElementById('kalmanAssetWrapper');
+        const kalmanFactorWrapper = document.getElementById('kalmanFactorWrapper');
+        const kalmanFilteredWrapper = document.getElementById('kalmanFilteredWrapper');
+        const kalmanSEWrapper = document.getElementById('kalmanSEWrapper');
+        const kalmanRollingWrapper = document.getElementById('kalmanRollingWrapper');
+        const kalmanShowRolling = document.getElementById('kalmanShowRolling');
+        const kalmanCheckboxContainer = document.getElementById('kalmanCheckboxContainer');
+
         let factorRiskLoaded = false;
+        let kalmanLoaded = false;
         let factorSelectorPopulated = false;
+        let kalmanAssetPopulated = false;
+        let kalmanFactorPopulated = false;
 
         function populateFactorSelector() {
           if (factorSelectorPopulated || !factorVolData) return;
@@ -502,16 +585,96 @@
           });
         }
 
+        function populateKalmanSelectors() {
+          if (!kalmanBetaData) return;
+          if (!kalmanAssetPopulated) {
+            kalmanAssetPopulated = true;
+            kalmanBetaData.assets.forEach(function(a, i) {
+              const opt = document.createElement('option');
+              opt.value = a; opt.textContent = a;
+              if (i === 0) opt.selected = true;
+              kalmanAssetSel.appendChild(opt);
+            });
+          }
+          if (!kalmanFactorPopulated) {
+            kalmanFactorPopulated = true;
+            kalmanBetaData.factors.forEach(function(f, i) {
+              const opt = document.createElement('option');
+              opt.value = f; opt.textContent = f;
+              if (i === 0) opt.selected = true;
+              kalmanFactorSel.appendChild(opt);
+            });
+          }
+        }
+
+        function populateKalmanCheckboxes() {
+          if (!kalmanCheckboxContainer || !kalmanBetaData) return;
+          kalmanCheckboxContainer.innerHTML = '';
+          const viewMode = kalmanViewModeSel ? kalmanViewModeSel.value : 'by-asset';
+          if (viewMode === 'by-asset') {
+            const selectedAsset = kalmanAssetSel.value;
+            const allFactors = kalmanBetaData.all_factors || [];
+            const activeFactors = kalmanBetaData.factors_by_asset[selectedAsset] || [];
+            allFactors.forEach(function(item) {
+              const isActive = activeFactors.indexOf(item) !== -1;
+              const div = document.createElement('div');
+              div.className = 'form-check form-check-inline';
+              if (!isActive) { div.style.opacity = '0.4'; div.title = 'Not significant for this asset'; }
+              div.innerHTML = '<input class="form-check-input" type="checkbox"'
+                + (isActive ? ' checked' : ' disabled')
+                + ' id="kb_' + item + '" value="' + item + '">'
+                + '<label class="form-check-label small" for="kb_' + item + '">' + item + '</label>';
+              kalmanCheckboxContainer.appendChild(div);
+              if (isActive) {
+                div.querySelector('input').addEventListener('change', renderFactorRiskInner);
+              }
+            });
+          } else {
+            var items = kalmanBetaData.assets || [];
+            items.forEach(function(item) {
+              const div = document.createElement('div');
+              div.className = 'form-check form-check-inline';
+              div.innerHTML = '<input class="form-check-input" type="checkbox" checked id="kb_' + item + '" value="' + item + '">'
+                + '<label class="form-check-label small" for="kb_' + item + '">' + item + '</label>';
+              kalmanCheckboxContainer.appendChild(div);
+              div.querySelector('input').addEventListener('change', renderFactorRiskInner);
+            });
+          }
+        }
+
+        function getCheckedKalmanItems() {
+          if (!kalmanCheckboxContainer) return null;
+          var checked = [];
+          kalmanCheckboxContainer.querySelectorAll('input[type=checkbox]:checked').forEach(function(cb) {
+            checked.push(cb.value);
+          });
+          return checked;
+        }
+
+        function updateKalmanControls(mode) {
+          const isTV = mode === 'time-varying';
+          const isByAsset = kalmanViewModeSel && kalmanViewModeSel.value === 'by-asset';
+          if (kalmanViewModeWrapper) kalmanViewModeWrapper.style.display = isTV ? '' : 'none';
+          if (kalmanAssetWrapper) kalmanAssetWrapper.style.display = (isTV && isByAsset) ? '' : 'none';
+          if (kalmanFactorWrapper) kalmanFactorWrapper.style.display = (isTV && !isByAsset) ? '' : 'none';
+          if (kalmanFilteredWrapper) kalmanFilteredWrapper.style.display = (isTV && isByAsset) ? '' : 'none';
+          if (kalmanSEWrapper) kalmanSEWrapper.style.display = (isTV && isByAsset) ? '' : 'none';
+          if (kalmanRollingWrapper) kalmanRollingWrapper.style.display = (isTV && isByAsset) ? '' : 'none';
+          if (kalmanCheckboxContainer) kalmanCheckboxContainer.style.display = isTV ? '' : 'none';
+        }
+
         function renderFactorRiskInner() {
           populateFactorSelector();
           const mode = modeSel.value;
-          const isHeatmap = mode === 'loadings';
 
           /* Show/hide factor sub-selector (for correlation mode) */
           factorWrapper.style.display = mode === 'correlation' ? '' : 'none';
 
+          /* Update Kalman control visibility */
+          updateKalmanControls(mode);
+
           /* Adjust chart height for heatmaps */
-          chartEl.classList.toggle('chart-container--tall', isHeatmap);
+          chartEl.classList.toggle('chart-container--tall', false);
 
           if (mode === 'volatility') {
             if (!factorVolData) { Plotly.react(chartEl, [], baseLayout, plotCfg); return; }
@@ -568,29 +731,156 @@
             }, plotCfg);
             descEl.textContent = 'Time-varying pairwise correlation between ' + selected + ' and other factors, derived from GARCH-forecasted PC variances and PCA eigenvectors.';
 
-          } else if (mode === 'loadings') {
-            if (!betaHeatmap) { Plotly.react(chartEl, [], baseLayout, plotCfg); return; }
-            Plotly.react(chartEl, [{
-              type: 'heatmap',
-              z: betaHeatmap.z,
-              x: betaHeatmap.x,
-              y: betaHeatmap.y,
-              colorscale: HEATMAP_SCALE,
-              zmin: betaHeatmap.zmin,
-              zmax: betaHeatmap.zmax,
-              colorbar: { title: 'Beta', titlefont: { size: 12 } },
-              hovertemplate: '<b>%{y}</b> &times; %{x}<br>Beta: %{z:.3f}<extra></extra>',
-              texttemplate: '%{z:.2f}',
-              textfont: { size: 10, color: '#001f38' },
-            }], {
-              ...heatmapLayout,
-              xaxis: { ...heatmapLayout.xaxis, tickangle: -45 },
-            }, plotCfg);
-            descEl.textContent = 'Regression betas of each industry on Fama-French factors. Estimated via LassoCV then OLS refit with t-statistic pruning. Assets sorted by R\u00b2 (top = highest); factors by variance explained.';
+          } else if (mode === 'time-varying') {
+            if (!kalmanBetaData) { Plotly.react(chartEl, [], baseLayout, plotCfg); return; }
+            const viewMode = kalmanViewModeSel.value;
+            const traces = [];
+            let layout = { ...baseLayout };
+
+            if (viewMode === 'by-asset') {
+              const asset = kalmanAssetSel.value;
+              if (!asset) return;
+              if (!kalmanBetaData.by_asset[asset]) { Plotly.react(chartEl, [], baseLayout, plotCfg); return; }
+              const assetData = kalmanBetaData.by_asset[asset];
+              const allFactors = kalmanBetaData.factors_by_asset[asset] || [];
+              const checkedItems = getCheckedKalmanItems();
+              const factors = checkedItems ? allFactors.filter(function(f) { return checkedItems.indexOf(f) !== -1; }) : allFactors;
+              const showFiltered = kalmanShowFiltered && kalmanShowFiltered.checked;
+              const showSE = kalmanShowSE && kalmanShowSE.checked;
+              const showRolling = kalmanShowRolling && kalmanShowRolling.checked;
+
+              factors.forEach(function(factor, i) {
+                const color = FACTOR_COLORS[i % FACTOR_COLORS.length];
+
+                /* SE fan (if Kalman + SE checkboxes both checked) */
+                if (showFiltered && showSE && assetData.lower_2se[factor] && assetData.upper_2se[factor]) {
+                  traces.push({
+                    x: assetData.x, y: assetData.lower_2se[factor],
+                    line: { width: 0 }, showlegend: false, hoverinfo: 'skip',
+                    type: 'scatter',
+                  });
+                  traces.push({
+                    x: assetData.x, y: assetData.upper_2se[factor],
+                    fill: 'tonexty',
+                    fillcolor: color.replace('rgb', 'rgba').replace(')', ', 0.15)'),
+                    line: { width: 0 }, showlegend: false, hoverinfo: 'skip',
+                    type: 'scatter',
+                  });
+                }
+
+                /* Filtered beta line (gated on Show Kalman checkbox) */
+                if (showFiltered) {
+                  traces.push({
+                    x: assetData.x, y: assetData.filtered[factor],
+                    type: 'scatter', mode: 'lines',
+                    name: factor,
+                    line: { color: color, width: 1.8 },
+                    hovertemplate: '<b>' + factor + '</b><br>%{x|%b %d, %Y}<br>\u03b2 = %{y:.3f}<extra></extra>',
+                  });
+                }
+
+                /* Rolling OLS comparison (dashed line) */
+                if (showRolling && assetData.rolling_ols && assetData.rolling_ols[factor]) {
+                  traces.push({
+                    x: assetData.x, y: assetData.rolling_ols[factor],
+                    type: 'scatter', mode: 'lines',
+                    name: factor + ' (OLS)',
+                    line: { color: color, width: 1.5, dash: 'dash' },
+                    opacity: 0.35,
+                    hovertemplate: '<b>' + factor + ' (OLS)</b><br>%{x|%b %d, %Y}<br>\u03b2 = %{y:.3f}<extra></extra>',
+                  });
+                }
+              });
+
+              /* Train/test vertical line */
+              if (kalmanBetaData.train_end) {
+                layout.shapes = (layout.shapes || []).concat([{
+                  type: 'line', xref: 'x', yref: 'paper',
+                  x0: kalmanBetaData.train_end, x1: kalmanBetaData.train_end, y0: 0, y1: 1,
+                  line: { color: COL.identity, width: 1.2, dash: 'dash' },
+                }]);
+                traces.push({
+                  type: 'scatter', mode: 'lines', name: 'Train end',
+                  x: [null], y: [null],
+                  line: { color: COL.identity, width: 1.2, dash: 'dash' },
+                  hoverinfo: 'skip', showlegend: true,
+                });
+              }
+
+              layout.yaxis = { ...layout.yaxis, title: 'Beta coefficient' };
+              descEl.textContent = 'Kalman-filtered time-varying factor betas for ' + asset + '.' + (showSE ? ' Shaded bands show \u00b12 standard errors from the Kalman filter.' : '') + (showRolling ? ' Dashed lines show rolling OLS estimates.' : '');
+
+            } else {
+              /* By-factor view */
+              if (!kalmanBetaData) return;
+              const factor = kalmanFactorSel.value;
+              if (!factor) return;
+              if (!kalmanBetaData.by_factor[factor]) { Plotly.react(chartEl, [], baseLayout, plotCfg); return; }
+              const factorData = kalmanBetaData.by_factor[factor];
+              const allAssetKeys = Object.keys(factorData.betas);
+              const checkedItems = getCheckedKalmanItems();
+              const assetKeys = checkedItems ? allAssetKeys.filter(function(a) { return checkedItems.indexOf(a) !== -1; }) : allAssetKeys;
+              assetKeys.forEach(function(asset, i) {
+                traces.push({
+                  x: factorData.x, y: factorData.betas[asset],
+                  type: 'scatter', mode: 'lines',
+                  name: asset,
+                  line: { color: FACTOR_COLORS[i % FACTOR_COLORS.length], width: 1.4 },
+                  hovertemplate: '<b>' + asset + '</b><br>%{x|%b %d, %Y}<br>\u03b2 = %{y:.3f}<extra></extra>',
+                });
+              });
+
+              if (kalmanBetaData.train_end) {
+                layout.shapes = (layout.shapes || []).concat([{
+                  type: 'line', xref: 'x', yref: 'paper',
+                  x0: kalmanBetaData.train_end, x1: kalmanBetaData.train_end, y0: 0, y1: 1,
+                  line: { color: COL.identity, width: 1.2, dash: 'dash' },
+                }]);
+                traces.push({
+                  type: 'scatter', mode: 'lines', name: 'Train end',
+                  x: [null], y: [null],
+                  line: { color: COL.identity, width: 1.2, dash: 'dash' },
+                  hoverinfo: 'skip', showlegend: true,
+                });
+              }
+
+              layout.yaxis = { ...layout.yaxis, title: 'Beta coefficient' };
+              descEl.textContent = 'Kalman-filtered ' + factor + ' beta across all assets over time.';
+            }
+
+            Plotly.react(chartEl, traces, layout, plotCfg);
           }
         }
 
         function renderFactorRisk() {
+          const mode = modeSel.value;
+
+          if (mode === 'time-varying') {
+            /* Lazy-load Kalman data */
+            if (kalmanLoaded) { renderFactorRiskInner(); return; }
+            descEl.textContent = 'Loading chart data\u2026';
+            /* Also ensure factor_risk is loaded (for loadings fallback) */
+            const promises = [fetchChartSection('kalman_betas')];
+            if (!factorRiskLoaded) promises.push(fetchChartSection('factor_risk'));
+            Promise.all(promises).then(function(results) {
+              kalmanBetaData = results[0];
+              kalmanLoaded = true;
+              if (results.length > 1) {
+                betaHeatmap = results[1].beta_heatmap;
+                factorCorrHeatmap = results[1].factor_corr_heatmap;
+                factorCovHeatmap = results[1].factor_cov_heatmap;
+                factorVolData = results[1].factor_vol_ts;
+                factorRiskLoaded = true;
+              }
+              populateKalmanSelectors();
+              populateKalmanCheckboxes();
+              renderFactorRiskInner();
+            }).catch(function() {
+              descEl.textContent = 'Failed to load chart data. Please re-run the analysis.';
+            });
+            return;
+          }
+
           if (factorRiskLoaded) { renderFactorRiskInner(); return; }
           descEl.textContent = 'Loading chart data\u2026';
           fetchChartSection('factor_risk').then(function(data) {
@@ -607,6 +897,12 @@
 
         modeSel.addEventListener('change', renderFactorRisk);
         factorSel.addEventListener('change', renderFactorRisk);
+        if (kalmanViewModeSel) kalmanViewModeSel.addEventListener('change', function() { populateKalmanCheckboxes(); renderFactorRisk(); });
+        if (kalmanAssetSel) kalmanAssetSel.addEventListener('change', function() { populateKalmanCheckboxes(); renderFactorRisk(); });
+        if (kalmanFactorSel) kalmanFactorSel.addEventListener('change', function() { populateKalmanCheckboxes(); renderFactorRisk(); });
+        if (kalmanShowFiltered) kalmanShowFiltered.addEventListener('change', renderFactorRiskInner);
+        if (kalmanShowSE) kalmanShowSE.addEventListener('change', renderFactorRisk);
+        if (kalmanShowRolling) kalmanShowRolling.addEventListener('change', renderFactorRisk);
         renderFactorRisk();
       })();
 
@@ -891,29 +1187,56 @@
             const view = returnsViewSel.value;
 
             if (view === 'total' && d.asset_returns) {
-              /* Total excess returns with optional ±2σ confidence band */
-              traces = [
-                { type: 'scatter', mode: 'lines', name: 'Excess return', x: d.x, y: d.asset_returns,
-                  line: { color: COL.ret, width: 0.9 },
-                  hovertemplate: '<b>Excess return</b><br>%{x|%b %d, %Y}<br>%{y:.2%}<extra></extra>' },
-              ];
-              if (d.upper_2s && d.lower_2s) {
+              /* Total excess returns with 99% confidence band (band rendered first so it's behind) */
+              traces = [];
+              if (d.upper_99 && d.lower_99) {
                 traces.push(
-                  { type: 'scatter', mode: 'lines', name: '+2\u03c3 band',
-                    x: d.x, y: d.upper_2s,
+                  { type: 'scatter', mode: 'lines', name: '+99% CI',
+                    x: d.x, y: d.upper_99,
                     line: { color: COL.forecast, width: 0 },
                     showlegend: false, hoverinfo: 'skip' },
-                  { type: 'scatter', mode: 'lines', name: '\u00b12\u03c3 band',
-                    x: d.x, y: d.lower_2s,
+                  { type: 'scatter', mode: 'lines', name: '99% CI',
+                    x: d.x, y: d.lower_99,
                     line: { color: COL.forecast, width: 0 },
                     fill: 'tonexty',
                     fillcolor: 'rgba(230, 57, 70, 0.12)',
                     hoverinfo: 'skip' }
                 );
               }
+              traces.push(
+                { type: 'scatter', mode: 'lines', name: 'Excess return', x: d.x, y: d.asset_returns,
+                  line: { color: COL.ret, width: 0.9 },
+                  hovertemplate: '<b>Excess return</b><br>%{x|%b %d, %Y}<br>%{y:.2%}<extra></extra>' }
+              );
               layout.yaxis = { ...layout.yaxis, title: 'Daily return', tickformat: '.2%' };
               descEl.textContent = 'Total excess returns for ' + asset
-                + (d.upper_2s ? '. Shaded band shows \u00b12\u03c3 from the model\u2019s conditional volatility forecast.' : '.');
+                + (d.upper_99 ? '. 99% confidence interval from the model\u2019s conditional volatility forecast.' : '.');
+
+            } else if (view === 'residual') {
+              /* Raw residuals with 99% CI from residual GARCH */
+              traces = [];
+              if (d.resid_upper_99 && d.resid_lower_99) {
+                traces.push(
+                  { type: 'scatter', mode: 'lines', name: '+99% CI',
+                    x: d.x, y: d.resid_upper_99,
+                    line: { color: COL.forecast, width: 0 },
+                    showlegend: false, hoverinfo: 'skip' },
+                  { type: 'scatter', mode: 'lines', name: '99% CI',
+                    x: d.x, y: d.resid_lower_99,
+                    line: { color: COL.forecast, width: 0 },
+                    fill: 'tonexty',
+                    fillcolor: 'rgba(230, 57, 70, 0.12)',
+                    hoverinfo: 'skip' }
+                );
+              }
+              traces.push(
+                { type: 'scatter', mode: 'lines', name: 'Residual', x: d.x, y: d.raw_resid,
+                  line: { color: COL.ret, width: 0.9 },
+                  hovertemplate: '<b>Residual</b><br>%{x|%b %d, %Y}<br>%{y:.4f}<extra></extra>' }
+              );
+              layout.yaxis = { ...layout.yaxis, title: 'Residual return' };
+              descEl.textContent = 'Raw residuals with 99% confidence interval from residual GARCH forecast for ' + asset + '.';
+
             } else {
               /* Standardized residuals with flat \u00b12\u03c3 and \u00b13\u03c3 lines */
               var xFull = d.x;
