@@ -779,15 +779,17 @@
                   });
                 }
 
-                /* Rolling OLS comparison (dashed line) */
-                if (showRolling && assetData.rolling_ols && assetData.rolling_ols[factor]) {
+                /* Rolling OLS: always included for stable axis range */
+                if (assetData.rolling_ols && assetData.rolling_ols[factor]) {
                   traces.push({
                     x: assetData.x, y: assetData.rolling_ols[factor],
-                    type: 'scatter', mode: 'lines',
-                    name: factor + ' (OLS)',
-                    line: { color: color, width: 1.5, dash: 'dash' },
-                    opacity: 0.35,
-                    hovertemplate: '<b>' + factor + ' (OLS)</b><br>%{x|%b %d, %Y}<br>\u03b2 = %{y:.3f}<extra></extra>',
+                    type: 'scatter', mode: showRolling ? 'lines' : 'lines',
+                    name: showRolling ? factor + ' (OLS)' : undefined,
+                    line: { color: color, width: showRolling ? 1.5 : 0 },
+                    opacity: showRolling ? 0.35 : 0,
+                    showlegend: showRolling,
+                    hoverinfo: showRolling ? undefined : 'skip',
+                    hovertemplate: showRolling ? '<b>' + factor + ' (OLS)</b><br>%{x|%b %d, %Y}<br>\u03b2 = %{y:.3f}<extra></extra>' : undefined,
                   });
                 }
               });
