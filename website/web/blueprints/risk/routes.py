@@ -10,17 +10,17 @@ import uuid
 
 from flask import Blueprint, current_app, flash, jsonify, redirect, render_template, request, url_for
 
-from toolkit.analysis.factor_analysis import (
-    FactorModel,
-    FactorRun,
+from toolkit.analysis.risk_model import (
+    RiskModel,
+    RiskModelRun,
     annualize_vol,
     covariance_to_correlation_df,
 )
-from toolkit.analysis.factor_storage import (
-    FactorAnalysisSnapshot,
-    list_factor_snapshots,
-    load_factor_snapshot,
-    save_factor_snapshot,
+from toolkit.analysis.risk_storage import (
+    RiskModelSnapshot,
+    list_factor_snapshots as list_risk_snapshots,
+    load_factor_snapshot as load_risk_snapshot,
+    save_factor_snapshot as save_risk_snapshot,
 )
 from toolkit.analysis.style_storage import snapshot_path
 from website.lib.data import SUPPORTED_FACTOR_SETS, SUPPORTED_INDUSTRY_UNIVERSES
@@ -29,13 +29,13 @@ from website.web.services.universe_cache import (
     get_universe_start_date_cached,
 )
 
-factor_bp = Blueprint("factor", __name__, url_prefix="/factor")
+risk_bp = Blueprint("risk", __name__, url_prefix="/risk")
 
 
-def _factor_results_dir() -> Path:
+def _risk_results_dir() -> Path:
     root = Path(current_app.instance_path)
     root.mkdir(parents=True, exist_ok=True)
-    path = root / "analysis_results" / "factor_analysis"
+    path = root / "analysis_results" / "risk_model"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -105,23 +105,28 @@ def _thin(n: int, max_points: int = 2500) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Run cache — holds FactorRun objects so AJAX endpoints can build chart data
+# Run cache — holds RiskModelRun objects so AJAX endpoints can build chart data
 # on demand without re-serializing everything into the initial HTML payload.
 # ---------------------------------------------------------------------------
-_run_cache: dict[str, FactorRun] = {}
+_run_cache: dict[str, RiskModelRun] = {}
+_run_meta_cache: dict[str, dict] = {}
 _MAX_CACHED_RUNS = 4
 
 
-def _cache_run(run: FactorRun) -> str:
+def _cache_run(run: RiskModelRun, meta: Optional[dict] = None) -> str:
     """Store *run* and return a cache key.  Evicts oldest if full."""
     run_id = uuid.uuid4().hex[:12]
     if len(_run_cache) >= _MAX_CACHED_RUNS:
-        _run_cache.pop(next(iter(_run_cache)), None)
+        evict_id = next(iter(_run_cache))
+        _run_cache.pop(evict_id, None)
+        _run_meta_cache.pop(evict_id, None)
     _run_cache[run_id] = run
+    if meta is not None:
+        _run_meta_cache[run_id] = meta
     return run_id
 
 
-def _summarize_factor_run(run: FactorRun) -> dict:
+def _summarize_factor_run(run: RiskModelRun) -> dict:
     """Build *lightweight* metadata payload for initial page load.
 
     Heavy chart data (factor vol TS, backtesting series, pairwise data) is
@@ -222,12 +227,15 @@ def _summarize_factor_run(run: FactorRun) -> dict:
     )
     has_backtest = isinstance(ev, dict) and bool(ev.get("timeseries"))
 
+    has_kalman_betas = "beta_ts" in run.results
+
     return {
         "meta": meta_payload,
         "asset_metrics": asset_metrics,
         "train_end": train_end_str,
         "has_factor_risk": has_factor_risk,
         "has_backtest": has_backtest,
+        "has_kalman_betas": has_kalman_betas,
     }
 
 
@@ -235,7 +243,7 @@ def _summarize_factor_run(run: FactorRun) -> dict:
 # Per-section chart data builders (called lazily via AJAX)
 # ---------------------------------------------------------------------------
 
-def _build_factor_risk_data(run: FactorRun) -> dict:
+def _build_factor_risk_data(run: RiskModelRun) -> dict:
     """Build factor risk chart payloads (beta heatmap, factor vol TS, etc.)."""
     ev = run.results.get("evaluation")
     train_end = None
@@ -344,7 +352,7 @@ def _build_factor_risk_data(run: FactorRun) -> dict:
     }
 
 
-def _build_backtest_data(run: FactorRun, *, sub: str | None = None) -> dict:
+def _build_backtest_data(run: RiskModelRun, *, sub: str | None = None) -> dict:
     """Build backtesting chart payloads.
 
     When *sub* is given, only the requested metric is built:
@@ -352,6 +360,7 @@ def _build_backtest_data(run: FactorRun, *, sub: str | None = None) -> dict:
       ``"correlation"`` — per_asset_corr + pairwise_corr
       ``"covariance"``  — per_asset_cov + pairwise_cov
       ``"returns"``     — per_asset_conf (std residuals + total returns)
+      ``"betas"``       — beta_backtest (time-varying Kalman betas, if available)
     When *sub* is ``None``, everything is built (backward-compat).
     """
     ev = run.results.get("evaluation")
@@ -443,13 +452,18 @@ def _build_backtest_data(run: FactorRun, *, sub: str | None = None) -> dict:
                 ):
                     ar = assets_excess_df[asset].astype(float).reindex(cidx)
                     entry["asset_returns"] = _safe_list(ar.round(6))
+                # Raw residuals
+                entry["raw_resid"] = _safe_list(r.round(6))
                 if (
                     asset_cond_vol_df is not None
                     and asset in asset_cond_vol_df.columns
                 ):
                     cond_vol = asset_cond_vol_df[asset].astype(float).reindex(cidx)
-                    entry["upper_2s"] = _safe_list((2.0 * cond_vol).round(6))
-                    entry["lower_2s"] = _safe_list((-2.0 * cond_vol).round(6))
+                    entry["upper_99"] = _safe_list((2.576 * cond_vol).round(6))
+                    entry["lower_99"] = _safe_list((-2.576 * cond_vol).round(6))
+                # Residual 99% CI from residual GARCH
+                entry["resid_upper_99"] = _safe_list((2.576 * s).round(6))
+                entry["resid_lower_99"] = _safe_list((-2.576 * s).round(6))
                 pa_conf_data[asset] = entry
             per_asset_conf = {
                 "assets": assets,
@@ -551,15 +565,119 @@ def _build_backtest_data(run: FactorRun, *, sub: str | None = None) -> dict:
         result["per_asset_cov"] = per_asset_cov
         result["pairwise_cov"] = pairwise_cov
 
+    # --- BETAS ---
+    if build_all or sub == "betas":
+        beta_ts = run.results.get("beta_ts")
+        result["beta_backtest"] = _build_kalman_beta_data(run) if beta_ts else None
+
     return result
+
+
+def _build_kalman_beta_data(run: RiskModelRun) -> dict:
+    """Build time-varying Kalman beta chart payloads (by-asset and by-factor views)."""
+    beta_ts = run.results.get("beta_ts", {})
+    beta_se = run.results.get("beta_se", {})
+    rolling_ols_ts = run.results.get("rolling_ols_ts", {})
+
+    ev = run.results.get("evaluation")
+    train_end = None
+    if isinstance(ev, dict):
+        train_end = ev.get("params", {}).get("train_end")
+    train_end_str = (
+        train_end.strftime("%Y-%m-%d") if hasattr(train_end, "strftime") else None
+    )
+
+    asset_names = sorted(beta_ts.keys())
+    by_asset: dict = {}
+    factors_by_asset: dict = {}
+    all_factors_set: set[str] = set()
+    by_factor_raw: dict[str, dict[str, dict]] = {}  # factor -> {asset -> {x, values}}
+
+    for asset in asset_names:
+        df = beta_ts[asset]  # DataFrame(T x k_selected)
+        se_df = beta_se.get(asset)
+        factors = [str(c) for c in df.columns]
+        factors_by_asset[asset] = factors
+        all_factors_set.update(factors)
+
+        step = _thin(len(df))
+        thinned = df.iloc[::step]
+        dates = _dates_to_strings(thinned.index)
+
+        filtered: dict[str, list] = {}
+        upper_2se: dict[str, list] = {}
+        lower_2se: dict[str, list] = {}
+
+        for factor in factors:
+            beta_vals = thinned[factor].to_numpy(dtype=float)
+            filtered[factor] = _safe_list(np.round(beta_vals, 6))
+
+            if se_df is not None and factor in se_df.columns:
+                se_vals = se_df[factor].iloc[::step].to_numpy(dtype=float)
+                upper_2se[factor] = _safe_list(np.round(beta_vals + 2.0 * se_vals, 6))
+                lower_2se[factor] = _safe_list(np.round(beta_vals - 2.0 * se_vals, 6))
+            else:
+                upper_2se[factor] = _safe_list(np.round(beta_vals, 6))
+                lower_2se[factor] = _safe_list(np.round(beta_vals, 6))
+
+            # Accumulate for by-factor view
+            if factor not in by_factor_raw:
+                by_factor_raw[factor] = {}
+            by_factor_raw[factor][asset] = {
+                "x": dates,
+                "values": filtered[factor],
+            }
+
+        rolling_ols: dict[str, list] = {}
+        if rolling_ols_ts and asset in rolling_ols_ts:
+            roll_df = rolling_ols_ts[asset]
+            roll_thinned = roll_df.iloc[::step]
+            for factor in factors:
+                if factor in roll_thinned.columns:
+                    rolling_ols[factor] = _safe_list(roll_thinned[factor].round(4))
+
+        by_asset[asset] = {
+            "x": dates,
+            "filtered": filtered,
+            "upper_2se": upper_2se,
+            "lower_2se": lower_2se,
+            "rolling_ols": rolling_ols,
+        }
+
+    # Build by-factor payload
+    all_factors = sorted(all_factors_set)
+    by_factor: dict = {}
+    for factor in all_factors:
+        asset_data = by_factor_raw.get(factor, {})
+        if not asset_data:
+            continue
+        # Use dates from the first asset that has this factor
+        sample_asset = next(iter(asset_data))
+        x = asset_data[sample_asset]["x"]
+        betas: dict[str, list] = {}
+        for a in sorted(asset_data.keys()):
+            betas[a] = asset_data[a]["values"]
+        by_factor[factor] = {"x": x, "betas": betas}
+
+    all_factors_list = sorted(set(str(c) for c in run.beta_loadings.columns))
+
+    return {
+        "assets": asset_names,
+        "factors_by_asset": factors_by_asset,
+        "all_factors": all_factors_list,
+        "by_asset": by_asset,
+        "factors": all_factors,
+        "by_factor": by_factor,
+        "train_end": train_end_str,
+    }
 
 
 # ---------------------------------------------------------------------------
 # AJAX endpoint — lazily serve chart data for a cached run
 # ---------------------------------------------------------------------------
 
-@factor_bp.route("/factor-analysis/chart-data/<section>")
-def factor_chart_data(section: str):
+@risk_bp.route("/risk-model/chart-data/<section>")
+def risk_chart_data(section: str):
     """Return JSON chart payload for *section* (``factor_risk`` or ``backtest``).
 
     Query-string must include ``run_id`` matching a key in ``_run_cache``.
@@ -574,6 +692,8 @@ def factor_chart_data(section: str):
     elif section == "backtest":
         sub = request.args.get("sub", "")
         return jsonify(_build_backtest_data(run, sub=sub or None))
+    elif section == "kalman_betas":
+        return jsonify(_build_kalman_beta_data(run))
     else:
         return jsonify({"error": f"Unknown section: {section}"}), 400
 
@@ -582,8 +702,8 @@ def factor_chart_data(section: str):
 # Routes
 # ---------------------------------------------------------------------------
 
-@factor_bp.route("/factor-analysis", methods=["GET", "POST"])
-def factor_analysis():
+@risk_bp.route("/risk-model", methods=["GET", "POST"])
+def risk_model():
     results: Optional[dict] = None
     run_id: Optional[str] = None
 
@@ -594,8 +714,8 @@ def factor_analysis():
     factor_set = (params.get("factor_set") or "ff3").strip()
     train_fraction_value = (params.get("train_fraction") or "0.7").strip()
     realized_window_value = (params.get("realized_window") or "60").strip()
-    save_name_value = (params.get("save_name") or "").strip()
-    save_overwrite = bool(params.get("save_overwrite"))
+    tstat_cutoff_value = (params.get("tstat_cutoff") or "4.0").strip()
+    kalman_q_scale_value = (params.get("kalman_q_scale") or "0.01").strip()
 
     weighting = "value"
     current_year = date.today().year
@@ -605,12 +725,22 @@ def factor_analysis():
     # --- Auto-load default saved run on GET ---
     if request.method == "GET" and results is None:
         try:
-            results_dir = _factor_results_dir()
+            results_dir = _risk_results_dir()
             default_path = snapshot_path(results_dir, "Alpha_Example")
             if default_path.exists():
-                snap = load_factor_snapshot(default_path)
+                snap = load_risk_snapshot(default_path)
                 results = _summarize_factor_run(snap.run)
-                run_id = _cache_run(snap.run)
+                run_id = _cache_run(snap.run, meta={
+                    "universe": snap.universe,
+                    "weighting": snap.weighting,
+                    "factor_set": snap.factor_set,
+                    "start_date": snap.start_date,
+                    "garch_dist": snap.garch_dist,
+                    "pca_demean": snap.pca_demean,
+                    "train_fraction": snap.train_fraction,
+                    "realized_window": snap.realized_window,
+                    "universe_data": snap.universe_data,
+                })
                 selected_universe = str(snap.universe)
                 garch_dist = snap.garch_dist or garch_dist
                 factor_set = snap.factor_set or factor_set
@@ -641,6 +771,14 @@ def factor_analysis():
         if realized_window < 5:
             raise ValueError("realized_window must be at least 5")
 
+        tstat_cutoff = float(tstat_cutoff_value)
+        if not (0.0 <= tstat_cutoff <= 10.0):
+            raise ValueError("tstat_cutoff must be between 0 and 10")
+
+        kalman_q_scale = float(kalman_q_scale_value)
+        if not (0.01 <= kalman_q_scale <= 10.0):
+            raise ValueError("kalman_q_scale must be between 0.01 and 10.0")
+
         earliest_start = get_universe_start_date_cached(universe, weighting, factor_set=factor_set)
         earliest_start_year = earliest_start.year
         default_start_year = earliest_start_year
@@ -669,10 +807,12 @@ def factor_analysis():
             if df.empty:
                 flash("No data returned for the requested range.", "warning")
             else:
-                fm = FactorModel(
+                fm = RiskModel(
                     rf_name="Rf",
                     garch_dist=garch_dist,
                     pca_demean=False,
+                    tstat_cutoff=tstat_cutoff,
+                    kalman_q_scale=kalman_q_scale,
                 )
                 run = fm.evaluate_train_test(
                     uni=df,
@@ -681,47 +821,30 @@ def factor_analysis():
                     progress=False,
                 )
                 results = _summarize_factor_run(run)
-                run_id = _cache_run(run)
-
-                if save_name_value:
-                    try:
-                        snapshot = FactorAnalysisSnapshot(
-                            name=save_name_value,
-                            created_at=datetime.now(),
-                            universe=universe,
-                            weighting=weighting,
-                            factor_set=factor_set,
-                            start_date=start_date,
-                            end_date=None,
-                            garch_dist=garch_dist,
-                            pca_demean=False,
-                            train_fraction=train_fraction,
-                            realized_window=realized_window,
-                            run=run,
-                            universe_data=df,
-                        )
-                        save_factor_snapshot(
-                            snapshot, _factor_results_dir(), overwrite=save_overwrite,
-                        )
-                        flash(f"Saved factor run '{snapshot.name}'.", "success")
-                        save_name_value = ""
-                        save_overwrite = False
-                    except FileExistsError:
-                        flash(
-                            "A saved run with that name already exists. Enable overwrite to replace it.",
-                            "warning",
-                        )
-                    except Exception:
-                        flash("Unable to save the factor run right now.", "danger")
+                run_id = _cache_run(run, meta={
+                    "universe": universe,
+                    "weighting": weighting,
+                    "factor_set": factor_set,
+                    "start_date": start_date,
+                    "garch_dist": garch_dist,
+                    "pca_demean": False,
+                    "train_fraction": train_fraction,
+                    "realized_window": realized_window,
+                    "universe_data": df,
+                })
     except ValueError:
         if request.method == "POST":
             flash("Please provide valid inputs.", "danger")
     except Exception:
         if request.method == "POST":
-            flash("Unable to run factor analysis right now.", "danger")
+            flash("Unable to run risk model right now.", "danger")
+
+    confirm_overwrite = request.args.get("confirm_overwrite", "")
+    if confirm_overwrite:
+        run_id = request.args.get("run_id", run_id or "")
 
     return render_template(
-        "factor_analysis.html",
+        "risk_model.html",
         results=results,
         run_id=run_id,
         universes=SUPPORTED_INDUSTRY_UNIVERSES,
@@ -731,51 +854,62 @@ def factor_analysis():
         factor_set=factor_set,
         train_fraction_value=train_fraction_value,
         realized_window_value=realized_window_value,
-        save_name_value=save_name_value,
-        save_overwrite=save_overwrite,
+        tstat_cutoff=tstat_cutoff_value,
+        kalman_q_scale=kalman_q_scale_value,
+        confirm_overwrite=confirm_overwrite,
         earliest_start_year=earliest_start_year or current_year,
         current_year=current_year,
     )
 
 
-@factor_bp.route("/factor-analysis/saved", methods=["GET"])
-def saved_factor_analysis():
+@risk_bp.route("/risk-model/saved", methods=["GET"])
+def risk_model_saved():
     selected_key = (request.args.get("run") or "").strip()
     saved_runs = []
 
     try:
-        results_dir = _factor_results_dir()
-        saved_runs = list_factor_snapshots(results_dir)
+        results_dir = _risk_results_dir()
+        saved_runs = list_risk_snapshots(results_dir)
 
         if selected_key:
-            return redirect(url_for("factor.view_saved_factor_analysis", run_key=selected_key))
+            return redirect(url_for("risk.view_saved_risk_model", run_key=selected_key))
     except FileNotFoundError:
-        flash("Saved factor run not found.", "warning")
+        flash("Saved risk model not found.", "warning")
     except Exception:
-        flash("Unable to load saved factor runs right now.", "danger")
+        flash("Unable to load saved risk models right now.", "danger")
 
     return render_template(
-        "factor_analysis_saved.html",
+        "risk_model_saved.html",
         saved_runs=saved_runs,
         selected_key=selected_key,
     )
 
 
-@factor_bp.route("/factor-analysis/saved/<run_key>/view", methods=["GET"])
-def view_saved_factor_analysis(run_key: str):
+@risk_bp.route("/risk-model/saved/<run_key>/view", methods=["GET"])
+def view_saved_risk_model(run_key: str):
     try:
-        results_dir = _factor_results_dir()
-        snapshot = load_factor_snapshot(snapshot_path(results_dir, run_key))
+        results_dir = _risk_results_dir()
+        snapshot = load_risk_snapshot(snapshot_path(results_dir, run_key))
     except FileNotFoundError:
-        flash("Saved factor run not found.", "warning")
-        return redirect(url_for("factor.saved_factor_analysis"))
+        flash("Saved risk model not found.", "warning")
+        return redirect(url_for("risk.risk_model_saved"))
     except Exception:
         flash("Unable to load the saved run right now.", "danger")
-        return redirect(url_for("factor.saved_factor_analysis"))
+        return redirect(url_for("risk.risk_model_saved"))
 
     run = snapshot.run
     results = _summarize_factor_run(run)
-    run_id = _cache_run(run)
+    run_id = _cache_run(run, meta={
+        "universe": snapshot.universe,
+        "weighting": snapshot.weighting,
+        "factor_set": snapshot.factor_set,
+        "start_date": snapshot.start_date,
+        "garch_dist": snapshot.garch_dist,
+        "pca_demean": snapshot.pca_demean,
+        "train_fraction": snapshot.train_fraction,
+        "realized_window": snapshot.realized_window,
+        "universe_data": snapshot.universe_data,
+    })
 
     current_year = date.today().year
     earliest_start_year = current_year
@@ -794,7 +928,7 @@ def view_saved_factor_analysis(run_key: str):
         pass
 
     return render_template(
-        "factor_analysis.html",
+        "risk_model.html",
         results=results,
         run_id=run_id,
         universes=SUPPORTED_INDUSTRY_UNIVERSES,
@@ -804,27 +938,27 @@ def view_saved_factor_analysis(run_key: str):
         factor_set=snapshot.factor_set or "ff3",
         train_fraction_value=str(snapshot.train_fraction),
         realized_window_value=str(snapshot.realized_window),
-        save_name_value="",
-        save_overwrite=False,
+        tstat_cutoff="4.0",
+        confirm_overwrite="",
         earliest_start_year=earliest_start_year,
         current_year=current_year,
     )
 
 
-@factor_bp.route("/factor-analysis/saved/<run_key>/delete", methods=["POST"])
-def delete_saved_factor_analysis(run_key: str):
+@risk_bp.route("/risk-model/saved/<run_key>/delete", methods=["POST"])
+def delete_saved_risk_model(run_key: str):
     if not request.form.get("confirm"):
         flash("Please confirm deletion before removing a saved run.", "warning")
-        return redirect(url_for("factor.saved_factor_analysis", run=run_key))
+        return redirect(url_for("risk.risk_model_saved", run=run_key))
 
     try:
-        results_dir = _factor_results_dir()
+        results_dir = _risk_results_dir()
         path = snapshot_path(results_dir, run_key)
         if not path.exists():
-            flash("Saved factor run not found.", "warning")
+            flash("Saved risk model not found.", "warning")
         else:
             try:
-                snap = load_factor_snapshot(path)
+                snap = load_risk_snapshot(path)
                 display_name = snap.name
             except Exception:
                 display_name = run_key
@@ -833,4 +967,48 @@ def delete_saved_factor_analysis(run_key: str):
     except Exception:
         flash("Unable to delete the saved run right now.", "danger")
 
-    return redirect(url_for("factor.saved_factor_analysis"))
+    return redirect(url_for("risk.risk_model_saved"))
+
+
+@risk_bp.route("/risk-model/save", methods=["POST"])
+def save_risk_model():
+    run_id = request.form.get("run_id", "").strip()
+    save_name = request.form.get("save_name", "").strip()
+    save_overwrite = bool(request.form.get("save_overwrite"))
+
+    if not run_id or not save_name:
+        flash("Please provide a name for the risk model.", "warning")
+        return redirect(url_for("risk.risk_model"))
+
+    run = _run_cache.get(run_id)
+    if run is None:
+        flash("Risk model not found in cache. Please re-run the analysis.", "warning")
+        return redirect(url_for("risk.risk_model"))
+
+    meta = _run_meta_cache.get(run_id, {})
+
+    try:
+        snapshot = RiskModelSnapshot(
+            name=save_name,
+            created_at=datetime.now(),
+            universe=meta.get("universe", 10),
+            weighting=meta.get("weighting", "value"),
+            factor_set=meta.get("factor_set", "ff3"),
+            start_date=meta.get("start_date"),
+            end_date=None,
+            garch_dist=meta.get("garch_dist", "t"),
+            pca_demean=meta.get("pca_demean", False),
+            train_fraction=meta.get("train_fraction", 0.7),
+            realized_window=meta.get("realized_window", 60),
+            run=run,
+            universe_data=meta.get("universe_data", pd.DataFrame()),
+        )
+        results_dir = Path(current_app.instance_path) / "analysis_results" / "risk_model"
+        save_risk_snapshot(snapshot, results_dir, overwrite=save_overwrite)
+        flash(f"Saved risk model '{save_name}'.", "success")
+    except FileExistsError:
+        return redirect(url_for("risk.risk_model", confirm_overwrite=save_name, run_id=run_id))
+    except Exception as e:
+        flash(f"Unable to save the risk model: {e}", "danger")
+
+    return redirect(url_for("risk.risk_model"))
