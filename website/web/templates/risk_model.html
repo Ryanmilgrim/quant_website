@@ -373,6 +373,7 @@
                     <option value="correlation">Correlation</option>
                     <option value="covariance">Covariance</option>
                     <option value="returns">Returns &amp; Residuals</option>
+                    <option value="betas">Factor Betas</option>
                   </select>
                 </div>
                 <div class="backtest-control-group" id="backtestScopeGroup">
@@ -433,6 +434,7 @@
       let perAssetCovData = null;
       let pairwiseCovData = null;
       let kalmanBetaData = null;
+      let betaBacktestData = null;
 
       /* Fetch helpers */
       const _fetchCache = {};
@@ -936,7 +938,7 @@
         function populateAssetDropdown() {
           if (assetDropdownPopulated) return;
           assetDropdownPopulated = true;
-          assets = (perAssetVolData && perAssetVolData.assets) || (perAssetCorrData && perAssetCorrData.assets) || (perAssetConfData && perAssetConfData.assets) || [];
+          assets = (perAssetVolData && perAssetVolData.assets) || (perAssetCorrData && perAssetCorrData.assets) || (perAssetConfData && perAssetConfData.assets) || (betaBacktestData && betaBacktestData.assets) || [];
           assets.forEach(function(a, i) {
             const opt = document.createElement('option');
             opt.value = a; opt.textContent = a;
@@ -962,8 +964,8 @@
           const metric = metricSel.value;
           const scope = scopeSel.value;
 
-          /* Returns forces per-asset */
-          if (metric === 'returns') {
+          /* Returns and Betas force per-asset */
+          if (metric === 'returns' || metric === 'betas') {
             scopeSel.value = 'asset';
             scopeGroup.style.display = 'none';
             assetGroup.style.display = '';
@@ -980,6 +982,12 @@
 
           /* Returns view toggle */
           returnsViewGroup.style.display = metric === 'returns' ? '' : 'none';
+
+          /* Betas hides corr/cov sub-controls */
+          if (metric === 'betas') {
+            corrCompareGroup.style.display = 'none';
+            corrPairGroup.style.display = 'none';
+          }
         }
 
         function addTrainEndLine(traces, layout, trainEnd, yRange) {
@@ -1264,6 +1272,26 @@
                 + '. Within \u00b12\u03c3: ' + d.pct_in_2s + '% (normal: 95.4%)'
                 + '. Within \u00b13\u03c3: ' + d.pct_in_3s + '% (normal: 99.7%).';
             }
+          /* ---- FACTOR BETAS ---- */
+          } else if (metric === 'betas') {
+            if (!betaBacktestData || !betaBacktestData.by_asset || !betaBacktestData.by_asset[asset]) {
+              descEl.textContent = 'No time-varying beta data available. Run with Kalman filtering enabled.';
+              Plotly.react(el, [], layout, plotCfg); return;
+            }
+            const bd = betaBacktestData.by_asset[asset];
+            const factors = betaBacktestData.factors_by_asset[asset] || [];
+            factors.forEach(function(f, i) {
+              const col = FACTOR_COLORS[i % FACTOR_COLORS.length];
+              traces.push({
+                type: 'scatter', mode: 'lines', name: f,
+                x: bd.x, y: bd.filtered[f],
+                line: { color: col, width: 1.5 },
+                hovertemplate: '<b>' + f + '</b><br>%{x|%m/%d/%y}<br>\u03b2 = %{y:.3f}<extra></extra>',
+              });
+            });
+            addTrainEndLine(traces, layout, betaBacktestData.train_end, null);
+            descEl.textContent = 'Kalman-filtered time-varying factor betas for ' + asset + '. After the train/test split, betas are held at their last filtered value for forecasting.';
+            layout.yaxis = { ...layout.yaxis, title: 'Beta (\u03b2)' };
           }
 
           Plotly.react(el, traces, layout, plotCfg);
@@ -1283,6 +1311,8 @@
           } else if (metric === 'covariance') {
             perAssetCovData = data.per_asset_cov;
             pairwiseCovData = data.pairwise_cov;
+          } else if (metric === 'betas') {
+            betaBacktestData = data.beta_backtest;
           }
         }
 

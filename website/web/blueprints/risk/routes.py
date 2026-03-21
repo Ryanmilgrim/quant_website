@@ -360,6 +360,7 @@ def _build_backtest_data(run: RiskModelRun, *, sub: str | None = None) -> dict:
       ``"correlation"`` — per_asset_corr + pairwise_corr
       ``"covariance"``  — per_asset_cov + pairwise_cov
       ``"returns"``     — per_asset_conf (std residuals + total returns)
+      ``"betas"``       — beta_backtest (time-varying Kalman betas, if available)
     When *sub* is ``None``, everything is built (backward-compat).
     """
     ev = run.results.get("evaluation")
@@ -563,6 +564,11 @@ def _build_backtest_data(run: RiskModelRun, *, sub: str | None = None) -> dict:
 
         result["per_asset_cov"] = per_asset_cov
         result["pairwise_cov"] = pairwise_cov
+
+    # --- BETAS ---
+    if build_all or sub == "betas":
+        beta_ts = run.results.get("beta_ts")
+        result["beta_backtest"] = _build_kalman_beta_data(run) if beta_ts else None
 
     return result
 
