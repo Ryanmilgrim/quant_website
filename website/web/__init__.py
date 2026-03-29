@@ -12,6 +12,7 @@ def create_app() -> Flask:
     from .blueprints.core.routes import core_bp
     from .blueprints.risk.routes import risk_bp
     from .blueprints.options.routes import options_bp
+    from .blueprints.regime.routes import regime_bp
     from .blueprints.style.routes import style_bp
     from .blueprints.universe.routes import universe_bp
 
@@ -20,6 +21,7 @@ def create_app() -> Flask:
     app.register_blueprint(options_bp)
     app.register_blueprint(style_bp)
     app.register_blueprint(risk_bp)
+    app.register_blueprint(regime_bp)
 
     return app
 

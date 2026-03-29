@@ -1,0 +1,1092 @@
+{% extends 'base.html' %}
+
+{% block content %}
+  <section class="section-header">
+    <span class="section-number">04</span>
+    <div class="section-text">
+      <p class="section-kicker">Econometric features</p>
+      <h2 class="section-title">Regime Signals</h2>
+      <p class="section-lede">Build endogenous signals from FRED economic time series using Markov Switching models. Each regime produces soft probabilities that serve as features for downstream ML models.</p>
+      <p class="section-note">Building regime signals is an iterative process. (1) Load a FRED series, choose a stationarity transform, and inspect the result — make sure the series is well-behaved before fitting. (2) Optionally set a training cutoff to hold out out-of-sample data, then configure your Hidden Markov Model and fit. (3) Review regime probabilities and parameter significance — if a mean is not significant, try disabling Switching Trend or changing the number of regimes and refit. When satisfied, name and save to your data lake.</p>
+    </div>
+    <div class="section-rule"></div>
+  </section>
+
+  {# ── Unified Workflow Card ── #}
+  <section class="report-grid report-grid--spaced">
+    <div class="span-12">
+      <div class="card report-card">
+        <div class="card-body">
+          <h5 class="card-title">
+            <span class="badge bg-secondary me-2" id="workflowBadge">1</span>
+            <span id="workflowTitleText">Load &amp; Inspect Data</span>
+          </h5>
+
+          {# ── Load controls (State 1) ── #}
+          <div id="loadControls">
+            {# Preset loader #}
+            {% if presets %}
+              <div class="mb-3">
+                <label class="form-label small text-muted" for="preset_select">Load from preset</label>
+                <div class="d-flex gap-2">
+                  <select class="form-select form-select-sm" id="preset_select" style="max-width: 300px;">
+                    <option value="">-- Select preset --</option>
+                    {% for p in presets %}
+                      <option value="{{ p.name }}"
+                              data-fred="{{ p.config.fred_series_id }}"
+                              data-transform="{{ p.config.transform.transform.value }}"
+                              data-window="{{ p.config.transform.window }}"
+                              data-k="{{ p.config.k_regimes }}"
+                              data-sv="{{ p.config.switching_variance | lower }}"
+                              data-st="{{ p.config.switching_trend | lower }}"
+                              data-te="{{ p.config.train_end or '' }}"
+                              data-desc="{{ p.config.description }}">
+                        {{ p.name }} ({{ p.config.fred_series_id }})
+                      </option>
+                    {% endfor %}
+                  </select>
+                  <button type="button" class="btn btn-sm btn-outline-secondary" id="loadPresetBtn">Apply</button>
+                </div>
+              </div>
+            {% endif %}
+
+            <div class="row g-3 align-items-end">
+              <div class="col-md-4">
+                <label class="form-label" for="fred_series_id">FRED series ID <small class="text-muted fw-normal" id="fred_hint"></small></label>
+                <input type="text" class="form-control" id="fred_series_id" name="fred_series_id" placeholder="GDP" required>
+              </div>
+              <div class="col-md-3">
+                <label class="form-label" for="transform_type">Transform</label>
+                <select class="form-select" id="transform_type" name="transform_type">
+                  {% for val, label in transform_types %}
+                    <option value="{{ val }}">{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-md-2" id="window_section">
+                <label class="form-label" for="transform_window">Window</label>
+                <input type="number" class="form-control" id="transform_window" name="transform_window" value="4" min="1" max="52">
+              </div>
+              <div class="col-auto">
+                <button class="btn btn-primary" type="button" id="loadDataBtn">Load Data</button>
+              </div>
+              <div class="col-auto">
+                <a class="btn btn-outline-secondary" href="{{ url_for('regime.saved_collections') }}">Saved data lakes</a>
+              </div>
+            </div>
+          </div>
+
+          {# ── Compact summary (shown when data loaded, hidden initially) ── #}
+          <div id="loadSummary" style="display:none">
+            <div class="d-flex align-items-center gap-2 mb-2">
+              <span class="badge bg-light text-dark border" id="summarySeriesId"></span>
+              <span class="badge bg-light text-dark border" id="summaryTransform"></span>
+              <a href="#" class="small" id="changeSeriesBtn" style="color: var(--teal-500);">Change series</a>
+              <span class="ms-auto">
+                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('regime.saved_collections') }}">Saved data lakes</a>
+              </span>
+            </div>
+          </div>
+
+          {# ── Unified chart area (single chart + dynamic dropdown) ── #}
+          <div id="chartSection" style="display:none">
+            <div id="chartLoading" class="text-muted mt-3">Loading series...</div>
+            <div id="chartError" class="text-danger mt-3" style="display:none"></div>
+            <div id="chartResults" style="display:none">
+              <div class="d-flex justify-content-between align-items-center mt-3 mb-2">
+                <span class="text-muted small" id="chartMetrics"></span>
+                <select class="form-select form-select-sm w-auto" id="chartMode" style="display:none"></select>
+              </div>
+              <div id="mainChart" class="chart-container"></div>
+              <div class="d-flex flex-wrap gap-2 mt-2" id="inspectBadges"></div>
+            </div>
+            <div id="previewRegStats" style="display:none">
+              <h6 class="mt-1 mb-2">Regression Summary</h6>
+              <div class="row g-3">
+                <div class="col-md-7">
+                  <div class="table-responsive">
+                    <table class="table table-sm mb-1" id="previewStatsTable">
+                      <thead><tr><th>Parameter</th><th>Coef</th><th>Std Err</th><th>P-value</th><th>Sig</th></tr></thead>
+                      <tbody></tbody>
+                    </table>
+                    <p class="small text-muted mb-0"><span class="text-success fw-bold">***</span> p &lt; 0.05 &nbsp;&middot;&nbsp; <span class="text-danger fw-bold">ns</span> = not significant</p>
+                  </div>
+                </div>
+                <div class="col-md-5">
+                  <table class="table table-sm mb-0" id="previewRegimeTable">
+                    <thead><tr><th>Regime</th><th>Label</th><th>Mean (ann.)</th><th>Std Dev (ann.)</th><th>E[Duration] (yrs)</th></tr></thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {# ── Configure controls (State 2, shown after data loaded) ── #}
+          <div id="configureControls" style="display:none">
+            <hr class="my-3">
+            <div class="row g-3 align-items-end">
+              <div class="col-md-3">
+                <label class="form-label" for="train_end">Training cutoff</label>
+                <input type="date" class="form-control" id="train_end" name="train_end" value="{{ default_train_end }}" title="Leave blank for full-sample fit.">
+              </div>
+              <div class="col-md-2">
+                <label class="form-label" for="k_regimes">Regimes</label>
+                <select class="form-select" id="k_regimes" name="k_regimes">
+                  {% for k in [2, 3, 4, 5] %}
+                    <option value="{{ k }}" {% if k == 2 %}selected{% endif %}>{{ k }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-auto">
+                <div class="form-check mt-4">
+                  <input class="form-check-input" type="checkbox" id="switching_variance" name="switching_variance" checked>
+                  <label class="form-check-label" for="switching_variance">Switching var</label>
+                </div>
+              </div>
+              <div class="col-auto">
+                <div class="form-check mt-4">
+                  <input class="form-check-input" type="checkbox" id="switching_trend" name="switching_trend" checked>
+                  <label class="form-check-label" for="switching_trend">Switching trend</label>
+                </div>
+              </div>
+              <div class="col-auto">
+                <button class="btn btn-primary mt-4" type="button" id="fitModelBtn">Fit Model</button>
+              </div>
+            </div>
+          </div>
+
+          {# ── Save controls (State 3, shown after fit) ── #}
+          <div id="saveControls" style="display:none">
+            <hr class="my-3">
+            <p class="text-muted small mb-3">Happy with the fit? Name it and add to your data lake.</p>
+            <form id="saveForm" method="post" action="{{ url_for('regime.fit_regime') }}">
+              <input type="hidden" name="fred_series_id" id="save_fred_id">
+              <input type="hidden" name="transform_type" id="save_transform_type">
+              <input type="hidden" name="transform_window" id="save_transform_window">
+              <input type="hidden" name="k_regimes" id="save_k_regimes">
+              <input type="hidden" name="train_end" id="save_train_end">
+              <div class="row g-3 align-items-end">
+                <div class="col-md-4">
+                  <label class="form-label" for="regime_name">Regime name</label>
+                  <input type="text" class="form-control" id="regime_name" name="regime_name" placeholder="GDP Recession" required>
+                </div>
+                <div class="col-md-5">
+                  <label class="form-label" for="description">Description (optional)</label>
+                  <input type="text" class="form-control" id="description" name="description" placeholder="Brief description of this regime">
+                </div>
+                <div class="col-auto">
+                  <button class="btn btn-success" type="submit">Add to Data Lake</button>
+                </div>
+                <div class="col-auto">
+                  <button class="btn btn-outline-secondary" type="button" id="downloadPreviewCsv">Download CSV</button>
+                </div>
+              </div>
+            </form>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  {# ── Individual Regime Detail (if viewing one) ── #}
+  {% if detail_summary %}
+    <section class="report-grid report-grid--spaced">
+      <div class="span-5">
+        <div class="card report-card">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h5 class="card-title mb-0">{{ detail_config.name }}</h5>
+              <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('regime.download_regime_csv', name=detail_config.name) }}">Download CSV</a>
+            </div>
+            <table class="table table-sm mb-0">
+              <tbody>
+                <tr><th scope="row">FRED ID</th><td>{{ detail_config.fred_series_id }}</td></tr>
+                <tr><th scope="row">Regimes</th><td>{{ detail_config.k_regimes }}</td></tr>
+                {% if detail_config.train_end %}
+                  <tr><th scope="row">Train End</th><td>{{ detail_config.train_end }}</td></tr>
+                {% endif %}
+                {% if detail_config.description %}
+                  <tr><th scope="row">Description</th><td>{{ detail_config.description }}</td></tr>
+                {% endif %}
+              </tbody>
+            </table>
+            <details class="mt-2">
+              <summary class="small text-muted" style="cursor: pointer;">Transform details</summary>
+              <table class="table table-sm mb-0 mt-1">
+                <tbody>
+                  <tr><th scope="row">Transform</th><td>{{ detail_config.transform.description }}</td></tr>
+                  <tr><th scope="row">Switching Var</th><td>{{ 'Yes' if detail_config.switching_variance else 'No' }}</td></tr>
+                  <tr><th scope="row">Switching Trend</th><td>{{ 'Yes' if detail_config.switching_trend else 'No' }}</td></tr>
+                </tbody>
+              </table>
+            </details>
+          </div>
+        </div>
+      </div>
+      <div class="span-7">
+        <div class="card report-card">
+          <div class="card-body">
+            <h5 class="card-title">Regime Parameters</h5>
+            {% if detail_summary.regime_table %}
+              <form method="post" action="{{ url_for('regime.label_regime', name=detail_config.name) }}">
+                <table class="table table-sm mb-2">
+                  <thead>
+                    <tr>
+                      <th scope="col">Regime</th>
+                      <th scope="col">Label</th>
+                      <th scope="col">Mean (ann.)</th>
+                      <th scope="col">Std Dev (ann.)</th>
+                      <th scope="col">E[Duration] (yrs)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for row in detail_summary.regime_table %}
+                      <tr>
+                        <td>{{ row.regime }}</td>
+                        <td><input type="text" class="form-control form-control-sm" name="label_{{ row.regime }}" value="{{ row.label or '' }}" placeholder="e.g. Bull" style="min-width: 80px;"></td>
+                        <td>{{ '%.2f' | format(row.mean) }}%</td>
+                        <td>{{ '%.2f' | format(row.std) if row.std is not none else '&mdash;' }}{% if row.std is not none %}%{% endif %}</td>
+                        <td>{{ '%.2f' | format(row.expected_duration) }} yrs</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+                <button class="btn btn-sm btn-outline-secondary" type="submit">Save labels</button>
+              </form>
+            {% endif %}
+            {% if detail_summary.metrics %}
+              <p class="text-muted small mt-2 mb-0">
+                AIC: {{ '%.2f' | format(detail_summary.metrics.aic) }} &middot;
+                BIC: {{ '%.2f' | format(detail_summary.metrics.bic) }} &middot;
+                Log-L: {{ '%.2f' | format(detail_summary.metrics.log_likelihood) }}
+                {% if detail_summary.metrics.converged %} &middot; Converged{% endif %}
+              </p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    {# Regression statistics table #}
+    {% if detail_summary.regression_stats %}
+      <section class="report-grid report-grid--spaced">
+        <div class="span-12">
+          <div class="card report-card">
+            <div class="card-body">
+              <h5 class="card-title">Regression Summary</h5>
+              <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th scope="col">Parameter</th>
+                      <th scope="col">Coefficient</th>
+                      <th scope="col">Std Error</th>
+                      <th scope="col">P-value</th>
+                      <th scope="col">Sig</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for stat in detail_summary.regression_stats %}
+                      <tr{% if stat.significant is defined and not stat.significant %} class="table-warning"{% endif %}>
+                        <td><code>{{ stat.name }}</code></td>
+                        <td>{{ '%.6f' | format(stat.coef) }}</td>
+                        <td>{{ '%.6f' | format(stat.std_err) if stat.std_err is defined else '&mdash;' }}</td>
+                        <td>{{ '%.6f' | format(stat.pvalue) if stat.pvalue is defined else '&mdash;' }}</td>
+                        <td>
+                          {% if stat.significant is defined %}
+                            {% if stat.significant %}
+                              <span class="text-success fw-bold">***</span>
+                            {% else %}
+                              <span class="text-danger fw-bold">ns</span>
+                            {% endif %}
+                          {% endif %}
+                        </td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+              <p class="small text-muted mt-2 mb-0"><span class="text-success fw-bold">***</span> p &lt; 0.05 &nbsp;&middot;&nbsp; <span class="text-danger fw-bold">ns</span> = not significant (highlighted rows)</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    {% endif %}
+
+    {# Refit form #}
+    <section class="report-grid report-grid--spaced">
+      <div class="span-12">
+        <div class="card report-card">
+          <div class="card-body">
+            <h5 class="card-title">Refit Model</h5>
+            <p class="text-muted small mb-3">Adjust model settings and refit <strong>{{ detail_config.name }}</strong> using the same FRED series and transform.</p>
+            <form method="post" action="{{ url_for('regime.refit_regime', name=detail_config.name) }}" class="app-form">
+              <div class="row g-3 align-items-end">
+                <div class="col-md-2">
+                  <label class="form-label" for="refit_k_regimes">Regimes</label>
+                  <select class="form-select" id="refit_k_regimes" name="k_regimes">
+                    {% for k in [2, 3, 4, 5] %}
+                      <option value="{{ k }}" {% if k == detail_config.k_regimes %}selected{% endif %}>{{ k }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label" for="refit_train_end">Training cutoff</label>
+                  <input type="date" class="form-control" id="refit_train_end" name="train_end" value="{{ detail_config.train_end or '' }}">
+                </div>
+                <div class="col-auto">
+                  <div class="form-check mt-4">
+                    <input class="form-check-input" type="checkbox" id="refit_sv" name="switching_variance" {% if detail_config.switching_variance %}checked{% endif %}>
+                    <label class="form-check-label" for="refit_sv">Switching var</label>
+                  </div>
+                </div>
+                <div class="col-auto">
+                  <div class="form-check mt-4">
+                    <input class="form-check-input" type="checkbox" id="refit_st" name="switching_trend" {% if detail_config.switching_trend %}checked{% endif %}>
+                    <label class="form-check-label" for="refit_st">Switching trend</label>
+                  </div>
+                </div>
+                <div class="col-auto">
+                  <button class="btn btn-primary mt-4" type="submit">Refit</button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  {% endif %}
+
+  {# ── Plotly rendering ── #}
+  <script src="https://cdn.plot.ly/plotly-2.35.0.min.js" crossorigin="anonymous"></script>
+
+  <script>
+    const REGIME_COLORS = ['#2c9bac', '#e63946', '#457b9d', '#f4a261', '#264653',
+                           '#6a994e', '#bc4749', '#a68a64', '#344e41', '#9b2226'];
+
+    const baseLayout = {
+      margin: { t: 40, r: 20, b: 60, l: 60 },
+      font: { family: 'Source Sans 3, Segoe UI, Tahoma, sans-serif', color: '#001f38' },
+      paper_bgcolor: 'rgba(0, 0, 0, 0)',
+      plot_bgcolor: '#ffffff',
+      xaxis: {
+        tickformat: "'%y", automargin: true, showline: true,
+        linecolor: '#d8dadb', linewidth: 1,
+        gridcolor: 'rgba(216, 218, 219, 0.4)',
+        tickfont: { color: '#667d89' }, titlefont: { color: '#001f38' },
+        zeroline: false, title: '',
+      },
+      yaxis: {
+        automargin: true, showline: true, linecolor: '#d8dadb', linewidth: 1,
+        gridcolor: 'rgba(216, 218, 219, 0.4)',
+        tickfont: { color: '#667d89' }, titlefont: { color: '#001f38' },
+        zeroline: false,
+      },
+      legend: { x: 0.01, y: 0.99, xanchor: 'left', yanchor: 'top', bgcolor: 'rgba(0,0,0,0)' },
+      showlegend: true,
+      hovermode: 'closest',
+      hoverlabel: { font: { color: '#001f38' } },
+    };
+    const plotCfg = { displaylogo: false, responsive: true };
+
+    function renderStackedProbs(elementId, chartData, trainEndDate, title) {
+      if (!chartData || !chartData.series || !chartData.series.length) return;
+      const traces = chartData.series.map((s, i) => ({
+        type: 'scatter', mode: 'lines', name: s.name,
+        x: s.x, y: s.y, stackgroup: 'one',
+        line: { width: 0.5, color: REGIME_COLORS[i % REGIME_COLORS.length] },
+        fillcolor: REGIME_COLORS[i % REGIME_COLORS.length] + '80',
+        hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:.1f}%<extra></extra>',
+      }));
+      const shapes = [];
+      if (trainEndDate) {
+        shapes.push({
+          type: 'line', xref: 'x', yref: 'paper',
+          x0: trainEndDate, x1: trainEndDate, y0: 0, y1: 1,
+          line: { color: '#e63946', width: 2, dash: 'dash' },
+        });
+      }
+      const chartTitle = title || chartData.title || '';
+      Plotly.newPlot(elementId, traces, {
+        ...baseLayout, shapes,
+        title: chartTitle ? { text: chartTitle, font: { size: 14, color: '#001f38' }, x: 0.01 } : undefined,
+        yaxis: { ...baseLayout.yaxis, title: 'Probability (%)', tickformat: '.0f', ticksuffix: '%', range: [0, 100] },
+      }, plotCfg);
+    }
+
+    function renderDualAxis(elementId, dualData, assignments, trainEndDate) {
+      /* Renders raw series on left y-axis and transformed on right y-axis.
+         If no dual data, falls back to single series chart. */
+      if (!dualData) return;
+
+      const traces = [];
+      const shapes = [];
+
+      // Raw series on left axis
+      traces.push({
+        type: 'scatter', mode: 'lines', name: dualData.raw.name,
+        x: dualData.raw.x, y: dualData.raw.y,
+        line: { color: '#001f38', width: 1.5 },
+        yaxis: 'y',
+        hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:,.4f}<extra></extra>',
+      });
+
+      // Transformed series on right axis
+      traces.push({
+        type: 'scatter', mode: 'lines', name: dualData.transformed.name,
+        x: dualData.transformed.x, y: dualData.transformed.y,
+        line: { color: '#2c9bac', width: 1.5, dash: 'dot' },
+        yaxis: 'y2',
+        hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:,.4f}<extra></extra>',
+      });
+
+      // Regime background shading
+      if (assignments && assignments.regimes && assignments.regimes.length > 1) {
+        let prev = assignments.regimes[0], start = assignments.x[0];
+        for (let i = 1; i <= assignments.regimes.length; i++) {
+          const curr = i < assignments.regimes.length ? assignments.regimes[i] : -1;
+          if (curr !== prev) {
+            const endX = i < assignments.x.length ? assignments.x[i] : assignments.x[assignments.x.length - 1];
+            shapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: start, x1: endX, y0: 0, y1: 1,
+              fillcolor: REGIME_COLORS[prev % REGIME_COLORS.length] + '20', line: { width: 0 }, layer: 'below' });
+            start = i < assignments.x.length ? assignments.x[i] : endX;
+            prev = curr;
+          }
+        }
+      }
+
+      if (trainEndDate) {
+        shapes.push({
+          type: 'line', xref: 'x', yref: 'paper',
+          x0: trainEndDate, x1: trainEndDate, y0: 0, y1: 1,
+          line: { color: '#e63946', width: 2, dash: 'dash' },
+        });
+      }
+
+      const title = dualData.title || '';
+      Plotly.newPlot(elementId, traces, {
+        ...baseLayout, shapes,
+        title: title ? { text: title, font: { size: 14, color: '#001f38' }, x: 0.01 } : undefined,
+        margin: { t: 50, r: 60, b: 60, l: 60 },
+        yaxis: { ...baseLayout.yaxis, title: dualData.raw.name, side: 'left' },
+        yaxis2: {
+          ...baseLayout.yaxis, title: 'Transformed', side: 'right',
+          overlaying: 'y', showgrid: false,
+          titlefont: { color: '#2c9bac' }, tickfont: { color: '#2c9bac' },
+        },
+        showlegend: true,
+      }, plotCfg);
+    }
+
+    function renderSeriesWithOverlay(elementId, chartData, assignments, trainEndDate) {
+      if (!chartData || !chartData.series || !chartData.series.length || !assignments) return;
+      const sd = chartData.series[0];
+      const shapes = [];
+      if (assignments.regimes && assignments.regimes.length > 1) {
+        let prev = assignments.regimes[0], start = assignments.x[0];
+        for (let i = 1; i <= assignments.regimes.length; i++) {
+          const curr = i < assignments.regimes.length ? assignments.regimes[i] : -1;
+          if (curr !== prev) {
+            const endX = i < assignments.x.length ? assignments.x[i] : assignments.x[assignments.x.length - 1];
+            shapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: start, x1: endX, y0: 0, y1: 1,
+              fillcolor: REGIME_COLORS[prev % REGIME_COLORS.length] + '20', line: { width: 0 }, layer: 'below' });
+            start = i < assignments.x.length ? assignments.x[i] : endX;
+            prev = curr;
+          }
+        }
+      }
+      if (trainEndDate) {
+        shapes.push({
+          type: 'line', xref: 'x', yref: 'paper',
+          x0: trainEndDate, x1: trainEndDate, y0: 0, y1: 1,
+          line: { color: '#e63946', width: 2, dash: 'dash' },
+        });
+      }
+      const title = chartData.title || '';
+      Plotly.newPlot(elementId, [{
+        type: 'scatter', mode: 'lines', name: sd.name, x: sd.x, y: sd.y,
+        line: { color: '#001f38', width: 1.5 },
+        hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:,.4f}<extra></extra>',
+      }], {
+        ...baseLayout, shapes,
+        title: title ? { text: title, font: { size: 14, color: '#001f38' }, x: 0.01 } : undefined,
+        yaxis: { ...baseLayout.yaxis, title: '' },
+        showlegend: false,
+      }, plotCfg);
+    }
+
+    function renderSimpleLineChart(elementId, chartData) {
+      if (!chartData || !chartData.series || !chartData.series.length) return;
+      const sd = chartData.series[0];
+      Plotly.newPlot(elementId, [{
+        type: 'scatter', mode: 'lines', name: sd.name, x: sd.x, y: sd.y,
+        line: { color: '#001f38', width: 1.5 },
+        hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:,.4f}<extra></extra>',
+      }], {
+        ...baseLayout,
+        yaxis: { ...baseLayout.yaxis, title: chartData.y_axis_title || '' },
+        showlegend: false,
+      }, plotCfg);
+    }
+
+    function renderRegimeForecast(elementId, chartProbs, transMatrix, nPeriods) {
+      if (!chartProbs || !transMatrix) return;
+      const series = chartProbs.series;
+      const k = series.length;
+      const tm = transMatrix.values;
+
+      // Historical traces — solid lines leading up to the forecast
+      const histTraces = series.map((s, i) => ({
+        type: 'scatter', mode: 'lines', name: s.name,
+        x: s.x, y: s.y,
+        line: { width: 1.5, color: REGIME_COLORS[i % REGIME_COLORS.length] },
+        hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:.1f}%<extra></extra>',
+      }));
+
+      // Walk-forward forecast anchored at the last historical point for visual continuity
+      let state = series.map(s => s.y[s.y.length - 1] / 100);
+      const xs = series[0].x;
+      const lastDate = xs[xs.length - 1];
+      const daysDiff = Math.round((new Date(lastDate) - new Date(xs[xs.length - 2])) / 86400000);
+
+      const futureDates = [lastDate];
+      const paths = series.map(s => [s.y[s.y.length - 1]]);
+
+      let d = new Date(lastDate);
+      for (let h = 0; h < nPeriods; h++) {
+        d = new Date(d.getTime() + daysDiff * 86400000);
+        futureDates.push(d.toISOString().split('T')[0]);
+        const next = Array(k).fill(0);
+        for (let i = 0; i < k; i++)
+          for (let j = 0; j < k; j++)
+            next[j] += state[i] * tm[i][j];
+        state = next;
+        for (let i = 0; i < k; i++) paths[i].push(+(state[i] * 100).toFixed(2));
+      }
+
+      const forecastTraces = transMatrix.labels.map((lbl, i) => ({
+        type: 'scatter', mode: 'lines', name: lbl,
+        x: futureDates, y: paths[i], showlegend: false,
+        line: { width: 2, color: REGIME_COLORS[i % REGIME_COLORS.length], dash: 'dash' },
+        hovertemplate: '<b>%{fullData.name} (forecast)</b><br>%{x}<br>%{y:.1f}%<extra></extra>',
+      }));
+
+      Plotly.newPlot(elementId, [...histTraces, ...forecastTraces], {
+        ...baseLayout,
+        shapes: [{
+          type: 'line', xref: 'x', yref: 'paper',
+          x0: lastDate, x1: lastDate, y0: 0, y1: 1,
+          line: { color: '#667d89', width: 1.5, dash: 'dot' },
+        }],
+        yaxis: { ...baseLayout.yaxis, title: 'Probability (%)', range: [0, 100] },
+        title: { text: 'Regime Forecast (12 periods)', font: { size: 14, color: '#001f38' }, x: 0.01 },
+        annotations: [{
+          x: lastDate, y: 1.02, xref: 'x', yref: 'paper',
+          xanchor: 'center', yanchor: 'bottom',
+          text: 'Now', showarrow: false, font: { size: 11, color: '#667d89' },
+        }],
+      }, plotCfg);
+    }
+
+    /* ── Unified chart state ── */
+    let inspectState = null;
+    let fitState = null;
+    let chartRendered = false;
+    let inspectData = null;   // stored inspect AJAX response
+    let previewData = null;   // stored fit AJAX response
+
+    const chartModeSel = document.getElementById('chartMode');
+
+    function rebuildChartDropdown(hasFitData) {
+      chartModeSel.innerHTML = '';
+      if (!hasFitData) {
+        chartModeSel.add(new Option('Transformed Series', 'inspect'));
+      }
+      if (hasFitData) {
+        chartModeSel.add(new Option('Time Series (Regime Overlay)', 'series'));
+        chartModeSel.add(new Option('Regime Probabilities', 'probs'));
+        chartModeSel.add(new Option('Regime Forecast (12 periods)', 'forecast'));
+      }
+      chartModeSel.style.display = chartModeSel.options.length > 1 ? '' : 'none';
+      chartModeSel.onchange = () => renderMainChart(chartModeSel.value);
+    }
+
+    function renderMainChart(mode) {
+      const te = document.getElementById('train_end').value || null;
+
+      // Inspect mode: show transformed series
+      if (mode === 'inspect') {
+        if (!inspectData || !inspectData.chart_series) return;
+        const cs = inspectData.chart_series;
+        if (!cs.series || !cs.series.length) return;
+        const sd = cs.series[0];
+        const shapes = te ? [{ type: 'line', x0: te, x1: te, yref: 'paper', y0: 0, y1: 1,
+          line: { color: '#e63946', width: 2, dash: 'dot' } }] : [];
+        Plotly.newPlot('mainChart', [{
+          type: 'scatter', mode: 'lines', name: sd.name, x: sd.x, y: sd.y,
+          line: { color: '#001f38', width: 1.5 },
+          hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:,.4f}<extra></extra>',
+        }], {
+          ...baseLayout, margin: { t: 40, r: 20, b: 60, l: 60 },
+          title: cs.title ? { text: cs.title, font: { size: 14, color: '#001f38' }, x: 0.01 } : undefined,
+          yaxis: { ...baseLayout.yaxis, title: cs.y_axis_title || '' }, showlegend: true, shapes,
+        }, plotCfg);
+        return;
+      }
+
+      // Fit modes
+      if (!previewData) return;
+      const fitTe = previewData.train_end_marker ? previewData.train_end_marker.date : null;
+      const name = previewData.metrics ? previewData.metrics.series_name : '';
+      if (mode === 'series') {
+        renderSeriesWithOverlay('mainChart', previewData.chart_series, previewData.regime_assignments, fitTe);
+      } else if (mode === 'probs') {
+        renderStackedProbs('mainChart', previewData.chart_probabilities, fitTe, name);
+      } else if (mode === 'forecast') {
+        renderRegimeForecast('mainChart', previewData.chart_probabilities, previewData.transition_matrix, 12);
+      }
+    }
+
+    /* ── Show/hide window input ── */
+    const transformSel = document.getElementById('transform_type');
+    const windowSec = document.getElementById('window_section');
+    function toggleWindow() {
+      const needsWindow = ['yoy_change', 'rolling_mean'].includes(transformSel.value);
+      windowSec.style.display = needsWindow ? '' : 'none';
+    }
+    transformSel.addEventListener('change', toggleWindow);
+    toggleWindow();
+
+    /* ── FRED series search hint ── */
+    let fredTimeout = null;
+    const fredInput = document.getElementById('fred_series_id');
+    const fredHint = document.getElementById('fred_hint');
+    fredInput.addEventListener('input', function () {
+      clearTimeout(fredTimeout);
+      const q = this.value.trim();
+      if (q.length < 2) { fredHint.textContent = ''; return; }
+      fredTimeout = setTimeout(() => {
+        fetch('{{ url_for("regime.search_fred") }}?q=' + encodeURIComponent(q))
+          .then(r => r.json())
+          .then(data => {
+            if (data.length) {
+              fredHint.textContent = data.slice(0, 3).map(d => d.id + ': ' + d.title).join(' | ');
+            } else {
+              fredHint.textContent = '';
+            }
+          })
+          .catch(() => { fredHint.textContent = ''; });
+      }, 400);
+    });
+
+    /* ── Workflow state machine ── */
+    const STATES = { LOAD: 1, CONFIGURE: 2, FITTED: 3 };
+    let workflowState = STATES.LOAD;
+
+    function setWorkflowState(state) {
+      workflowState = state;
+      const badge = document.getElementById('workflowBadge');
+      const titleText = document.getElementById('workflowTitleText');
+      const loadControls = document.getElementById('loadControls');
+      const loadSummary = document.getElementById('loadSummary');
+      const configureControls = document.getElementById('configureControls');
+      const saveControls = document.getElementById('saveControls');
+
+      if (state === STATES.LOAD) {
+        badge.textContent = '1';
+        titleText.innerHTML = 'Load &amp; Inspect Data';
+        loadControls.style.display = '';
+        loadSummary.style.display = 'none';
+        configureControls.style.display = 'none';
+        saveControls.style.display = 'none';
+      } else if (state === STATES.CONFIGURE) {
+        badge.textContent = '2';
+        titleText.innerHTML = 'Configure &amp; Fit Model';
+        loadControls.style.display = 'none';
+        loadSummary.style.display = '';
+        configureControls.style.display = '';
+        saveControls.style.display = 'none';
+      } else if (state === STATES.FITTED) {
+        badge.textContent = '3';
+        titleText.innerHTML = 'Review &amp; Save';
+        loadControls.style.display = 'none';
+        loadSummary.style.display = '';
+        configureControls.style.display = '';
+        saveControls.style.display = '';
+      }
+    }
+
+    /* ── Change series link ── */
+    document.getElementById('changeSeriesBtn').addEventListener('click', function (e) {
+      e.preventDefault();
+      setWorkflowState(STATES.LOAD);
+      document.getElementById('chartSection').style.display = 'none';
+      document.getElementById('previewRegStats').style.display = 'none';
+      inspectData = null;
+      previewData = null;
+      fitState = null;
+      chartRendered = false;
+    });
+
+    /* ── Load Data (Step 1) ── */
+    document.getElementById('loadDataBtn').addEventListener('click', function () {
+      const chartSection = document.getElementById('chartSection');
+      const loading = document.getElementById('chartLoading');
+      const error = document.getElementById('chartError');
+      const results = document.getElementById('chartResults');
+
+      chartSection.style.display = '';
+      loading.style.display = '';
+      loading.textContent = 'Loading series...';
+      error.style.display = 'none';
+      results.style.display = 'none';
+      document.getElementById('previewRegStats').style.display = 'none';
+      chartRendered = false;
+      previewData = null;
+
+      const formData = new FormData();
+      formData.append('fred_series_id', fredInput.value);
+      formData.append('transform_type', document.getElementById('transform_type').value);
+      formData.append('transform_window', document.getElementById('transform_window').value);
+
+      fetch('{{ url_for("regime.inspect_data") }}', { method: 'POST', body: formData })
+        .then(r => r.json())
+        .then(data => {
+          loading.style.display = 'none';
+          if (data.error) {
+            error.textContent = data.error;
+            error.style.display = '';
+            return;
+          }
+
+          inspectState = {
+            fred_id: fredInput.value.trim().toUpperCase(),
+            transform_type: document.getElementById('transform_type').value,
+            transform_window: document.getElementById('transform_window').value,
+          };
+          inspectData = data;
+
+          results.style.display = '';
+          rebuildChartDropdown(false);
+          chartModeSel.value = 'inspect';
+          renderMainChart('inspect');
+          chartRendered = true;
+
+          // Metadata badges
+          const m = data.metadata;
+          const badges = document.getElementById('inspectBadges');
+          badges.innerHTML = [
+            ['Obs', m.n_obs],
+            ['Frequency', m.frequency],
+            ['Range', m.start + ' \u2013 ' + m.end],
+            ['Missing', m.missing],
+            ['Mean \u00b1 Std', m.mean.toFixed(4) + ' \u00b1 ' + m.std.toFixed(4)],
+            ['Min / Max', m.min.toFixed(4) + ' / ' + m.max.toFixed(4)],
+          ].map(([lbl, val]) =>
+            `<span class="badge bg-light text-dark border"><strong>${lbl}:</strong> ${val}</span>`
+          ).join('');
+
+          // Populate summary and transition to Configure state
+          document.getElementById('summarySeriesId').textContent = inspectState.fred_id;
+          const transformSel = document.getElementById('transform_type');
+          const transformLabel = transformSel.options[transformSel.selectedIndex].text;
+          const windowVal = document.getElementById('transform_window').value;
+          const needsWindow = ['yoy_change', 'rolling_mean'].includes(inspectState.transform_type);
+          document.getElementById('summaryTransform').textContent =
+            needsWindow ? transformLabel + ' (' + windowVal + ')' : transformLabel;
+          setWorkflowState(STATES.CONFIGURE);
+        })
+        .catch(err => {
+          loading.style.display = 'none';
+          error.textContent = 'Request failed: ' + err.message;
+          error.style.display = '';
+        });
+    });
+
+    /* ── Training cutoff marker update ── */
+    document.getElementById('train_end').addEventListener('change', function () {
+      if (!chartRendered) return;
+      // Re-render current chart mode to apply updated train_end marker
+      renderMainChart(chartModeSel.value);
+    });
+
+    /* ── Fit Model (Step 2) ── */
+    document.getElementById('fitModelBtn').addEventListener('click', function () {
+      if (!inspectState) return;
+
+      const loading = document.getElementById('chartLoading');
+      const error = document.getElementById('chartError');
+
+      loading.style.display = '';
+      loading.textContent = 'Fitting model...';
+      error.style.display = 'none';
+
+      const formData = new FormData();
+      formData.append('fred_series_id', inspectState.fred_id);
+      formData.append('transform_type', inspectState.transform_type);
+      formData.append('transform_window', inspectState.transform_window);
+      formData.append('k_regimes', document.getElementById('k_regimes').value);
+      formData.append('switching_variance', document.getElementById('switching_variance').checked ? 'true' : 'false');
+      formData.append('switching_trend', document.getElementById('switching_trend').checked ? 'true' : 'false');
+      formData.append('train_end', document.getElementById('train_end').value);
+
+      fetch('{{ url_for("regime.preview_regime") }}', { method: 'POST', body: formData })
+        .then(r => r.json())
+        .then(data => {
+          loading.style.display = 'none';
+          if (data.error) {
+            error.textContent = data.error;
+            error.style.display = '';
+            return;
+          }
+          previewData = data;
+
+          // Rebuild dropdown with both inspect and fit options
+          rebuildChartDropdown(true);
+          chartModeSel.value = 'series';
+          renderMainChart('series');
+
+          // Metrics line
+          if (data.metrics) {
+            const m = data.metrics;
+            document.getElementById('chartMetrics').textContent =
+              `AIC: ${m.aic} \u00b7 BIC: ${m.bic} \u00b7 Log-L: ${m.log_likelihood}` +
+              (m.converged ? ' \u00b7 Converged' : ' \u00b7 NOT converged');
+          }
+
+          // Regression stats
+          const statsSection = document.getElementById('previewRegStats');
+          if (data.regression_stats && data.regression_stats.length) {
+            statsSection.style.display = '';
+            const tbody = document.querySelector('#previewStatsTable tbody');
+            tbody.innerHTML = '';
+            data.regression_stats.forEach(s => {
+              const notSig = s.significant !== undefined && !s.significant;
+              const rowClass = notSig ? ' class="table-warning"' : '';
+              const sigCell = s.significant !== undefined
+                ? (s.significant ? '<span class="text-success fw-bold">***</span>' : '<span class="text-danger fw-bold">ns</span>')
+                : '';
+              tbody.innerHTML += `<tr${rowClass}>
+                <td><code>${s.name}</code></td>
+                <td>${s.coef !== null ? s.coef.toFixed(6) : '&mdash;'}</td>
+                <td>${s.std_err !== null && s.std_err !== undefined ? s.std_err.toFixed(6) : '&mdash;'}</td>
+                <td>${s.pvalue !== null && s.pvalue !== undefined ? s.pvalue.toFixed(6) : '&mdash;'}</td>
+                <td>${sigCell}</td>
+              </tr>`;
+            });
+
+            if (data.regime_table) {
+              const rtbody = document.querySelector('#previewRegimeTable tbody');
+              rtbody.innerHTML = '';
+              data.regime_table.forEach(r => {
+                rtbody.innerHTML += `<tr>
+                  <td>${r.regime}</td>
+                  <td><input type="text" class="form-control form-control-sm" id="preview_label_${r.regime}" value="${r.label || ''}" placeholder="e.g. Bull" style="min-width: 80px;"></td>
+                  <td>${r.mean.toFixed(2)}%</td>
+                  <td>${r.std !== null && r.std !== undefined ? r.std.toFixed(2) + '%' : '&mdash;'}</td>
+                  <td>${r.expected_duration ? r.expected_duration.toFixed(2) + ' yrs' : '&mdash;'}</td>
+                </tr>`;
+              });
+            }
+          } else {
+            statsSection.style.display = 'none';
+          }
+
+          // Populate save form hidden inputs and transition to Fitted state
+          if (inspectState) {
+            document.getElementById('save_fred_id').value = inspectState.fred_id;
+            document.getElementById('save_transform_type').value = inspectState.transform_type;
+            document.getElementById('save_transform_window').value = inspectState.transform_window;
+            document.getElementById('save_k_regimes').value = document.getElementById('k_regimes').value;
+            document.getElementById('save_train_end').value = document.getElementById('train_end').value;
+            fitState = {
+              switching_variance: document.getElementById('switching_variance').checked,
+              switching_trend: document.getElementById('switching_trend').checked,
+            };
+            setWorkflowState(STATES.FITTED);
+          }
+        })
+        .catch(err => {
+          loading.style.display = 'none';
+          error.textContent = 'Request failed: ' + err.message;
+          error.style.display = '';
+        });
+    });
+
+    /* ── Save Form: inject switching checkboxes before submit ── */
+    const _existingNames = {{ (entries_table | map(attribute='name') | list) | tojson }};
+    document.getElementById('saveForm').addEventListener('submit', function (event) {
+      if (!fitState) { event.preventDefault(); return; }
+
+      const enteredName = document.getElementById('regime_name').value.trim();
+      if (_existingNames.includes(enteredName)) {
+        if (!confirm('A regime named "' + enteredName + '" already exists. This will overwrite it. Continue?')) {
+          event.preventDefault();
+          return;
+        }
+      }
+
+      this.querySelectorAll('.dynamic-switch').forEach(el => el.remove());
+      if (fitState && fitState.switching_variance) {
+        const inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'switching_variance'; inp.value = 'on';
+        inp.className = 'dynamic-switch';
+        this.appendChild(inp);
+      }
+      if (fitState && fitState.switching_trend) {
+        const inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'switching_trend'; inp.value = 'on';
+        inp.className = 'dynamic-switch';
+        this.appendChild(inp);
+      }
+      document.querySelectorAll('[id^="preview_label_"]').forEach(el => {
+        if (el.value.trim()) {
+          const regime = el.id.replace('preview_label_', '');
+          const inp = document.createElement('input');
+          inp.type = 'hidden'; inp.name = 'label_' + regime; inp.value = el.value.trim();
+          inp.className = 'dynamic-switch';
+          this.appendChild(inp);
+        }
+      });
+    });
+
+    /* ── CSV download from preview data ── */
+    document.getElementById('downloadPreviewCsv').addEventListener('click', function () {
+      if (!previewData || !previewData.chart_probabilities) return;
+      const series = previewData.chart_probabilities.series;
+      if (!series.length) return;
+
+      const dates = series[0].x;
+      const headers = ['date'].concat(series.map(s => s.name));
+      const rows = dates.map((d, i) => {
+        const vals = series.map(s => (s.y[i] / 100).toFixed(6));
+        return [d].concat(vals).join(',');
+      });
+
+      const csv = [headers.join(',')].concat(rows).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (document.getElementById('regime_name').value.trim() || 'regime') + '_probs.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    /* ── Preset loader ── */
+    const presetSel = document.getElementById('preset_select');
+    const loadPresetBtn = document.getElementById('loadPresetBtn');
+    if (presetSel && loadPresetBtn) {
+      loadPresetBtn.addEventListener('click', function () {
+        const opt = presetSel.options[presetSel.selectedIndex];
+        if (!opt.value) return;
+        fredInput.value = opt.dataset.fred || '';
+        document.getElementById('transform_type').value = opt.dataset.transform || 'none';
+        document.getElementById('transform_window').value = opt.dataset.window || '4';
+        document.getElementById('k_regimes').value = opt.dataset.k || '2';
+        document.getElementById('switching_variance').checked = opt.dataset.sv === 'true';
+        document.getElementById('switching_trend').checked = opt.dataset.st === 'true';
+        document.getElementById('train_end').value = opt.dataset.te || '';
+        toggleWindow();
+        document.getElementById('loadDataBtn').click();
+      });
+    }
+
+    /* ── View mode: inject detail_summary directly into chart state ── */
+    {% if detail_summary and view_config_json %}
+      (function () {
+        const viewCfg = {{ view_config_json | tojson }};
+        const detailData = {{ detail_summary | tojson }};
+
+        // Pre-populate form fields
+        document.getElementById('fred_series_id').value = viewCfg.fred_series_id;
+        document.getElementById('transform_type').value = viewCfg.transform_type;
+        document.getElementById('transform_window').value = viewCfg.transform_window;
+        document.getElementById('k_regimes').value = viewCfg.k_regimes;
+        document.getElementById('switching_variance').checked = viewCfg.switching_variance;
+        document.getElementById('switching_trend').checked = viewCfg.switching_trend;
+        document.getElementById('train_end').value = viewCfg.train_end;
+        document.getElementById('regime_name').value = viewCfg.name;
+        document.getElementById('description').value = viewCfg.description;
+        toggleWindow();
+
+        // Inject detail data as both inspect and preview data
+        inspectState = {
+          fred_id: viewCfg.fred_series_id,
+          transform_type: viewCfg.transform_type,
+          transform_window: viewCfg.transform_window,
+        };
+        inspectData = {
+          chart_dual_axis: detailData.chart_dual_axis || null,
+          chart_series: detailData.chart_series || null,
+        };
+        previewData = detailData;
+        fitState = {
+          switching_variance: viewCfg.switching_variance,
+          switching_trend: viewCfg.switching_trend,
+        };
+
+        // Show chart with full fit options
+        document.getElementById('chartSection').style.display = '';
+        document.getElementById('chartResults').style.display = '';
+        rebuildChartDropdown(true);
+        chartModeSel.value = 'series';
+        renderMainChart('series');
+        chartRendered = true;
+
+        // Show metrics
+        if (detailData.metrics) {
+          const m = detailData.metrics;
+          document.getElementById('chartMetrics').textContent =
+            `AIC: ${m.aic} \u00b7 BIC: ${m.bic} \u00b7 Log-L: ${m.log_likelihood}` +
+            (m.converged ? ' \u00b7 Converged' : ' \u00b7 NOT converged');
+        }
+
+        // Populate summary badges
+        document.getElementById('summarySeriesId').textContent = viewCfg.fred_series_id;
+        const tSel = document.getElementById('transform_type');
+        document.getElementById('summaryTransform').textContent = tSel.options[tSel.selectedIndex].text;
+
+        // Populate save form
+        document.getElementById('save_fred_id').value = viewCfg.fred_series_id;
+        document.getElementById('save_transform_type').value = viewCfg.transform_type;
+        document.getElementById('save_transform_window').value = viewCfg.transform_window;
+        document.getElementById('save_k_regimes').value = viewCfg.k_regimes;
+        document.getElementById('save_train_end').value = viewCfg.train_end;
+
+        setWorkflowState(STATES.FITTED);
+      })();
+    {% elif view_config_json %}
+      (function () {
+        const viewCfg = {{ view_config_json | tojson }};
+        document.getElementById('fred_series_id').value = viewCfg.fred_series_id;
+        document.getElementById('transform_type').value = viewCfg.transform_type;
+        document.getElementById('transform_window').value = viewCfg.transform_window;
+        document.getElementById('k_regimes').value = viewCfg.k_regimes;
+        document.getElementById('switching_variance').checked = viewCfg.switching_variance;
+        document.getElementById('switching_trend').checked = viewCfg.switching_trend;
+        document.getElementById('train_end').value = viewCfg.train_end;
+        document.getElementById('regime_name').value = viewCfg.name;
+        document.getElementById('description').value = viewCfg.description;
+        toggleWindow();
+        document.getElementById('loadDataBtn').click();
+      })();
+    {% else %}
+      /* ── Fresh page load: clear browser-cached form values ── */
+      document.getElementById('fred_series_id').value = '';
+      document.getElementById('transform_type').value = 'none';
+      document.getElementById('transform_window').value = '4';
+      document.getElementById('k_regimes').value = '2';
+      document.getElementById('switching_variance').checked = true;
+      document.getElementById('switching_trend').checked = true;
+      document.getElementById('train_end').value = '{{ default_train_end }}';
+      document.getElementById('regime_name').value = '';
+      document.getElementById('description').value = '';
+      toggleWindow();
+    {% endif %}
+  </script>
+{% endblock %}
