@@ -5,8 +5,8 @@
     <span class="section-number">07</span>
     <div class="section-text">
       <p class="section-kicker">Risk lab</p>
-      <h2 class="section-title">Saved Factor Runs</h2>
-      <p class="section-lede">Load prior factor analysis runs stored locally.</p>
+      <h2 class="section-title">Saved Risk Model Runs</h2>
+      <p class="section-lede">Load prior risk model runs stored locally.</p>
       <p class="section-note">Saved runs include inputs, data, and the full model results.</p>
     </div>
     <div class="section-rule"></div>
@@ -30,11 +30,11 @@
                       </option>
                     {% endfor %}
                   </select>
-                  <p class="form-text">Saved locally under instance/analysis_results/factor_analysis.</p>
+                  <p class="form-text">Saved locally under instance/analysis_results/risk_model.</p>
                 </div>
                 <div class="col-12 d-flex flex-column flex-sm-row gap-2">
                   <button class="btn btn-primary" type="submit">Load saved run</button>
-                  <a class="btn btn-outline-secondary" href="{{ url_for('factor.factor_analysis') }}">Run new analysis</a>
+                  <a class="btn btn-outline-secondary" href="{{ url_for('risk.risk_model') }}">Run new analysis</a>
                 </div>
               </div>
             </form>
@@ -82,8 +82,8 @@
                           {% endif %}
                         </td>
                         <td class="text-end">
-                          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('factor.view_saved_factor_analysis', run_key=run.key) }}">View</a>
-                          <form method="post" action="{{ url_for('factor.delete_saved_factor_analysis', run_key=run.key) }}" class="d-inline">
+                          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('risk.view_saved_risk_model', run_key=run.key) }}">View</a>
+                          <form method="post" action="{{ url_for('risk.delete_saved_risk_model', run_key=run.key) }}" class="d-inline">
                             <input type="hidden" name="confirm" value="1">
                             <button class="btn btn-sm btn-outline-danger" type="submit">Delete</button>
                           </form>
@@ -95,8 +95,8 @@
               </div>
             </div>
           {% else %}
-            <p class="text-muted mb-0">No saved runs yet. Run a factor analysis and save it.</p>
-            <a class="btn btn-outline-secondary mt-3" href="{{ url_for('factor.factor_analysis') }}">Run new analysis</a>
+            <p class="text-muted mb-0">No saved runs yet. Run a risk model and save it.</p>
+            <a class="btn btn-outline-secondary mt-3" href="{{ url_for('risk.risk_model') }}">Run new analysis</a>
           {% endif %}
         </div>
       </div>
