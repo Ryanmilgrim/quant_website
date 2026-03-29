@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import io
+import pickle
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -10,6 +12,7 @@ import numpy as np
 import pandas as pd
 from flask import (
     Blueprint,
+    Response,
     current_app,
     flash,
     jsonify,
@@ -24,22 +27,18 @@ from toolkit.analysis.regime_detection import (
     RegimeCollection,
     RegimeConfig,
     RegimeModel,
-    RegimeRun,
 )
 from toolkit.analysis.regime_storage import (
-    RegimeCollectionInfo,
     RegimeCollectionSnapshot,
     RegimePreset,
-    list_regime_collections,
     list_regime_presets,
     load_regime_collection,
     save_regime_collection,
     save_regime_preset,
 )
-from toolkit.analysis.style_storage import snapshot_path
 from toolkit.analysis.transforms import TransformConfig, TransformType, apply_transform
 from toolkit.data.fred import fetch_fred_series, search_fred_series
-from toolkit.plotly_payload import summarize_regime_collection, summarize_regime_run
+from toolkit.plotly_payload import summarize_regime_run
 
 regime_bp = Blueprint("regime", __name__, url_prefix="/regime")
 
@@ -53,11 +52,58 @@ _raw_series_cache: dict[str, dict[str, pd.Series]] = {}
 _MAX_CACHED = 20
 
 
+def _active_pkl_path() -> Path:
+    """Path to the auto-saved active collection pickle."""
+    return _regime_results_dir() / "collections" / "_active.pkl"
+
+
+def _active_raw_pkl_path() -> Path:
+    """Path to the auto-saved raw series pickle."""
+    return _regime_results_dir() / "collections" / "_active_raw.pkl"
+
+
+def _auto_save(collection: RegimeCollection) -> None:
+    """Persist the active collection to disk automatically."""
+    try:
+        snap = RegimeCollectionSnapshot(
+            name="_active",
+            created_at=datetime.now(),
+            collection=collection,
+        )
+        save_regime_collection(snap, _regime_results_dir(), overwrite=True)
+    except Exception:
+        pass
+
+
+def _auto_save_raw() -> None:
+    """Persist the raw series cache to disk."""
+    sid = session.get("_regime_sid", "")
+    raw_map = _raw_series_cache.get(sid, {})
+    try:
+        path = _active_raw_pkl_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as f:
+            pickle.dump(raw_map, f, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception:
+        pass
+
+
 def _get_collection() -> RegimeCollection:
-    """Get the current session's RegimeCollection."""
+    """Get the current session's RegimeCollection, auto-loading from disk if needed."""
     sid = session.get("_regime_sid")
     if sid and sid in _collection_cache:
         return _collection_cache[sid]
+    # Try to load auto-saved collection from disk
+    try:
+        path = _active_pkl_path()
+        if path.exists():
+            snap = load_regime_collection(path)
+            sid = sid or _new_session_id()
+            session["_regime_sid"] = sid
+            _collection_cache[sid] = snap.collection
+            return snap.collection
+    except Exception:
+        pass
     coll = RegimeCollection()
     sid = sid or _new_session_id()
     session["_regime_sid"] = sid
@@ -66,7 +112,7 @@ def _get_collection() -> RegimeCollection:
 
 
 def _set_collection(coll: RegimeCollection) -> None:
-    """Store a collection for the current session."""
+    """Store a collection for the current session and auto-save to disk."""
     sid = session.get("_regime_sid") or _new_session_id()
     session["_regime_sid"] = sid
     if len(_collection_cache) >= _MAX_CACHED:
@@ -74,24 +120,39 @@ def _set_collection(coll: RegimeCollection) -> None:
         _collection_cache.pop(oldest, None)
         _raw_series_cache.pop(oldest, None)
     _collection_cache[sid] = coll
+    _auto_save(coll)
 
 
 def _get_raw_series_map() -> dict[str, pd.Series]:
-    """Get the raw series cache for the current session."""
+    """Get the raw series cache, auto-loading from disk if needed."""
     sid = session.get("_regime_sid", "")
+    if sid in _raw_series_cache and _raw_series_cache[sid]:
+        return _raw_series_cache[sid]
+    # Try to load from disk
+    try:
+        path = _active_raw_pkl_path()
+        if path.exists():
+            with path.open("rb") as f:
+                raw_map = pickle.load(f)
+            _raw_series_cache[sid] = raw_map
+            return raw_map
+    except Exception:
+        pass
     return _raw_series_cache.setdefault(sid, {})
 
 
 def _store_raw_series(name: str, series: pd.Series) -> None:
-    """Store a raw series for the current session."""
+    """Store a raw series for the current session and auto-save."""
     sid = session.get("_regime_sid", "")
     _raw_series_cache.setdefault(sid, {})[name] = series
+    _auto_save_raw()
 
 
 def _remove_raw_series(name: str) -> None:
-    """Remove a raw series from the current session's cache."""
+    """Remove a raw series from the current session's cache and auto-save."""
     sid = session.get("_regime_sid", "")
     _raw_series_cache.get(sid, {}).pop(name, None)
+    _auto_save_raw()
 
 
 def _new_session_id() -> str:
@@ -147,18 +208,6 @@ def regime_detection():
     collection = _get_collection()
     raw_map = _get_raw_series_map()
 
-    # Build collection summary for display
-    coll_summary = None
-    if collection:
-        labels_map = {}
-        for cfg, _ in collection.entries:
-            if cfg.regime_labels:
-                labels_map[cfg.name] = dict(cfg.regime_labels)
-        coll_summary = summarize_regime_collection(
-            collection, regime_labels_map=labels_map,
-            raw_series_map=raw_map,
-        )
-
     # Build collection entries table data
     entries_table = []
     for cfg, run in collection.entries:
@@ -181,6 +230,7 @@ def regime_detection():
             "train_end": cfg.train_end or "full",
             "switching_variance": cfg.switching_variance,
             "switching_trend": cfg.switching_trend,
+            "converged": m.get("converged", True),
         })
 
     # Load saved presets for the form dropdown
@@ -205,10 +255,28 @@ def regime_detection():
         except KeyError:
             pass
 
+    # Serialize config for JS pre-populate when viewing a saved regime
+    view_config_json = None
+    if detail_config:
+        view_config_json = {
+            "fred_series_id": detail_config.fred_series_id,
+            "transform_type": detail_config.transform.transform.value,
+            "transform_window": detail_config.transform.window,
+            "k_regimes": detail_config.k_regimes,
+            "switching_variance": detail_config.switching_variance,
+            "switching_trend": detail_config.switching_trend,
+            "train_end": detail_config.train_end or "",
+            "description": detail_config.description or "",
+            "name": detail_config.name,
+        }
+
+    # Default training cutoff = most recent Dec 31
+    today = date.today()
+    default_train_end = date(today.year - 1, 12, 31).isoformat()
+
     return render_template(
         "regime_detection.html",
         collection=collection,
-        coll_summary=coll_summary,
         entries_table=entries_table,
         transform_types=[
             (t.value, t.name.replace("_", " ").title()) for t in TransformType
@@ -217,6 +285,8 @@ def regime_detection():
         detail_summary=detail_summary,
         detail_config=detail_config,
         view_name=view_name,
+        view_config_json=view_config_json,
+        default_train_end=default_train_end,
     )
 
 
@@ -249,6 +319,13 @@ def fit_regime():
         train_end = (request.form.get("train_end") or "").strip() or None
         description = (request.form.get("description") or "").strip()
 
+        # Collect regime labels from preview inputs (label_0, label_1, ...)
+        regime_labels = {
+            i: lbl
+            for i in range(k_regimes)
+            if (lbl := (request.form.get(f"label_{i}") or "").strip())
+        } or None
+
         config = RegimeConfig(
             name=regime_name,
             fred_series_id=fred_id,
@@ -258,6 +335,7 @@ def fit_regime():
             switching_variance=switching_variance,
             switching_trend=switching_trend,
             train_end=train_end,
+            regime_labels=regime_labels,
         )
 
         # Fetch FRED data
@@ -273,16 +351,24 @@ def fit_regime():
         # Store raw series for dual-axis charts
         _store_raw_series(regime_name, raw_series)
 
-        # Add to collection
+        # Remove existing regime with same name (overwrite)
+        try:
+            collection.remove(regime_name)
+        except KeyError:
+            pass
         collection.add(config, run)
         _set_collection(collection)
 
-        flash(f"Fitted regime '{regime_name}' and added to collection.", "success")
+        flash(f"Fitted regime '{regime_name}' and added to data lake.", "success")
+        return redirect(url_for("regime.regime_detection"))
 
     except ValueError as exc:
         flash(str(exc), "danger")
     except RuntimeError as exc:
-        flash(str(exc), "danger")
+        msg = str(exc)
+        if "converge" in msg.lower():
+            msg += " Try submitting again, or reduce the number of regimes."
+        flash(msg, "danger")
     except Exception as exc:
         flash(f"Failed to fit regime: {exc}", "danger")
 
@@ -306,10 +392,100 @@ def remove_regime(name: str):
         collection.remove(name)
         _remove_raw_series(name)
         _set_collection(collection)
-        flash(f"Removed '{name}' from collection.", "success")
+        flash(f"Removed '{name}' from data lake.", "success")
     except KeyError:
         flash(f"Regime '{name}' not found.", "warning")
     return redirect(url_for("regime.regime_detection"))
+
+
+# ---------------------------------------------------------------------------
+# Refit an existing regime with updated model settings
+# ---------------------------------------------------------------------------
+
+@regime_bp.route("/regime-detection/refit/<name>", methods=["POST"])
+def refit_regime(name: str):
+    collection = _get_collection()
+    try:
+        cfg_old, _ = collection.get(name)
+
+        k_regimes = int(request.form.get("k_regimes", cfg_old.k_regimes))
+        switching_variance = "switching_variance" in request.form
+        switching_trend = "switching_trend" in request.form
+        train_end = (request.form.get("train_end") or "").strip() or None
+
+        config = RegimeConfig(
+            name=name,
+            fred_series_id=cfg_old.fred_series_id,
+            transform=cfg_old.transform,
+            description=cfg_old.description,
+            k_regimes=k_regimes,
+            switching_variance=switching_variance,
+            switching_trend=switching_trend,
+            train_end=train_end,
+        )
+
+        raw_series = fetch_fred_series(cfg_old.fred_series_id)
+        transformed = apply_transform(raw_series, cfg_old.transform)
+        model = RegimeModel.from_config(config)
+        run = model.run(transformed, name=name, train_end=train_end)
+
+        _store_raw_series(name, raw_series)
+        collection.remove(name)
+        collection.add(config, run)
+        _set_collection(collection)
+
+        flash(f"Refitted '{name}' and updated in data lake.", "success")
+        return redirect(url_for("regime.regime_detection", view=name))
+
+    except KeyError:
+        flash(f"Regime '{name}' not found.", "warning")
+    except ValueError as exc:
+        flash(str(exc), "danger")
+    except RuntimeError as exc:
+        msg = str(exc)
+        if "converge" in msg.lower():
+            msg += " Try submitting again, or reduce the number of regimes."
+        flash(msg, "danger")
+    except Exception as exc:
+        flash(f"Failed to refit regime: {exc}", "danger")
+
+    return redirect(url_for("regime.regime_detection", view=name))
+
+
+# ---------------------------------------------------------------------------
+# Update regime labels (no refit)
+# ---------------------------------------------------------------------------
+
+@regime_bp.route("/regime-detection/label/<name>", methods=["POST"])
+def label_regime(name: str):
+    collection = _get_collection()
+    try:
+        cfg_old, run = collection.get(name)
+        labels = {
+            i: lbl
+            for i in range(cfg_old.k_regimes)
+            if (lbl := (request.form.get(f"label_{i}") or "").strip())
+        }
+        config = RegimeConfig(
+            name=cfg_old.name,
+            fred_series_id=cfg_old.fred_series_id,
+            transform=cfg_old.transform,
+            description=cfg_old.description,
+            k_regimes=cfg_old.k_regimes,
+            switching_variance=cfg_old.switching_variance,
+            switching_trend=cfg_old.switching_trend,
+            train_end=cfg_old.train_end,
+            regime_labels=labels if labels else None,
+        )
+        collection.remove(name)
+        collection.add(config, run)
+        _set_collection(collection)
+        flash(f"Labels updated for '{name}'.", "success")
+    except KeyError:
+        flash(f"Regime '{name}' not found.", "warning")
+    except Exception as exc:
+        flash(f"Failed to update labels: {exc}", "danger")
+    return redirect(url_for("regime.regime_detection", view=name))
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +497,8 @@ def clear_collection():
     sid = session.get("_regime_sid", "")
     _raw_series_cache.pop(sid, None)
     _set_collection(RegimeCollection())
-    flash("Collection cleared.", "success")
+    _auto_save_raw()
+    flash("Data lake cleared.", "success")
     return redirect(url_for("regime.regime_detection"))
 
 
@@ -365,6 +542,82 @@ def preview_regime():
 
 
 # ---------------------------------------------------------------------------
+# Inspect series without fitting (AJAX)
+# ---------------------------------------------------------------------------
+
+@regime_bp.route("/regime-detection/inspect-data", methods=["POST"])
+def inspect_data():
+    try:
+        fred_id = (request.form.get("fred_series_id") or "").strip().upper()
+        if not fred_id:
+            return jsonify({"error": "FRED series ID is required."}), 400
+        transform_type = _parse_transform_type(request.form.get("transform_type", "none"))
+        window = int(request.form.get("transform_window", "4") or "4")
+        transform = TransformConfig(transform=transform_type, window=window)
+
+        raw = fetch_fred_series(fred_id)
+        transformed = apply_transform(raw, transform)
+
+        from toolkit.plotly_payload import line_chart_payload
+        chart_series = line_chart_payload(
+            transformed.rename(fred_id).to_frame(), y_axis_title=fred_id
+        )
+
+        metadata = {
+            "n_obs": len(transformed),
+            "frequency": _infer_frequency(transformed),
+            "start": transformed.index.min().date().isoformat(),
+            "end": transformed.index.max().date().isoformat(),
+            "missing": int(raw.isna().sum()),
+            "mean": round(float(transformed.mean()), 4),
+            "std": round(float(transformed.std()), 4),
+            "min": round(float(transformed.min()), 4),
+            "max": round(float(transformed.max()), 4),
+        }
+        return jsonify({
+            "chart_series": chart_series,
+            "metadata": metadata,
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+# ---------------------------------------------------------------------------
+# CSV download
+# ---------------------------------------------------------------------------
+
+@regime_bp.route("/regime-detection/download/<name>", methods=["GET"])
+def download_regime_csv(name: str):
+    """Download soft regime probabilities as a business-day CSV."""
+    collection = _get_collection()
+    try:
+        cfg, run = collection.get(name)
+    except KeyError:
+        flash(f"Regime '{name}' not found.", "danger")
+        return redirect(url_for("regime.regime_detection"))
+
+    probs = run.smoothed_probabilities.copy()
+
+    # Rename columns using labels if available
+    if cfg.regime_labels:
+        probs.columns = [
+            cfg.regime_labels.get(i, col)
+            for i, col in enumerate(probs.columns)
+        ]
+
+    # Resample to business day frequency, forward-fill (no data leakage)
+    probs = probs.resample("B").ffill()
+
+    buf = io.StringIO()
+    probs.to_csv(buf, index=True, index_label="date")
+    resp = Response(buf.getvalue(), mimetype="text/csv")
+    resp.headers["Content-Disposition"] = (
+        f'attachment; filename="{name}_regime_probs.csv"'
+    )
+    return resp
+
+
+# ---------------------------------------------------------------------------
 # FRED search (AJAX)
 # ---------------------------------------------------------------------------
 
@@ -381,86 +634,35 @@ def search_fred():
 
 
 # ---------------------------------------------------------------------------
-# Save / load collection
+# Data lake management page
 # ---------------------------------------------------------------------------
-
-@regime_bp.route("/regime-detection/save", methods=["POST"])
-def save_collection_route():
-    collection = _get_collection()
-    if not collection:
-        flash("Nothing to save — collection is empty.", "warning")
-        return redirect(url_for("regime.regime_detection"))
-
-    name = (request.form.get("collection_name") or "").strip()
-    if not name:
-        flash("Please provide a name for the collection.", "warning")
-        return redirect(url_for("regime.regime_detection"))
-
-    overwrite = "overwrite" in request.form
-
-    try:
-        snap = RegimeCollectionSnapshot(
-            name=name,
-            created_at=datetime.now(),
-            collection=collection,
-        )
-        save_regime_collection(snap, _regime_results_dir(), overwrite=overwrite)
-        flash(f"Saved collection '{name}'.", "success")
-    except FileExistsError:
-        flash(
-            "A collection with that name already exists. Check 'Overwrite' to replace.",
-            "warning",
-        )
-    except Exception:
-        flash("Unable to save the collection right now.", "danger")
-
-    return redirect(url_for("regime.regime_detection"))
-
 
 @regime_bp.route("/regime-detection/saved", methods=["GET"])
 def saved_collections():
-    try:
-        collections = list_regime_collections(_regime_results_dir())
-    except Exception:
-        collections = []
-        flash("Unable to list saved collections.", "danger")
+    collection = _get_collection()
+    raw_map = _get_raw_series_map()
+
+    entries_table = []
+    for cfg, run in collection.entries:
+        m = run.meta
+        raw_s = raw_map.get(cfg.name)
+        n_missing = int(raw_s.isna().sum()) if raw_s is not None else 0
+        freq = _infer_frequency(raw_s) if raw_s is not None else "?"
+        entries_table.append({
+            "name": cfg.name,
+            "fred_series_id": cfg.fred_series_id,
+            "k_regimes": cfg.k_regimes,
+            "n_obs": m.get("n_obs", "?"),
+            "start_date": m.get("start_date", "?"),
+            "frequency": freq,
+            "missing_obs": n_missing,
+            "converged": m.get("converged", True),
+        })
 
     return render_template(
         "regime_detection_saved.html",
-        collections=collections,
+        entries_table=entries_table,
     )
-
-
-@regime_bp.route("/regime-detection/saved/<key>/load", methods=["POST"])
-def load_saved_collection(key: str):
-    try:
-        results_dir = _regime_results_dir()
-        path = snapshot_path(results_dir / "collections", key)
-        snap = load_regime_collection(path)
-        _set_collection(snap.collection)
-        flash(f"Loaded collection '{snap.name}'.", "success")
-    except FileNotFoundError:
-        flash("Saved collection not found.", "warning")
-    except Exception:
-        flash("Unable to load the collection.", "danger")
-    return redirect(url_for("regime.regime_detection"))
-
-
-@regime_bp.route("/regime-detection/saved/<key>/delete", methods=["POST"])
-def delete_saved_collection(key: str):
-    if not request.form.get("confirm"):
-        flash("Please confirm deletion.", "warning")
-        return redirect(url_for("regime.saved_collections"))
-    try:
-        path = snapshot_path(_regime_results_dir() / "collections", key)
-        if path.exists():
-            path.unlink()
-            flash("Deleted saved collection.", "success")
-        else:
-            flash("Collection not found.", "warning")
-    except Exception:
-        flash("Unable to delete the collection.", "danger")
-    return redirect(url_for("regime.saved_collections"))
 
 
 # ---------------------------------------------------------------------------

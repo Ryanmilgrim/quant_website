@@ -5,8 +5,8 @@
     <span class="section-number">04</span>
     <div class="section-text">
       <p class="section-kicker">Econometric features</p>
-      <h2 class="section-title">Saved Regime Collections</h2>
-      <p class="section-lede">Load or manage previously saved regime detection collections.</p>
+      <h2 class="section-title">Data Lake</h2>
+      <p class="section-lede">Manage the regime signals in your data lake. These soft probabilities serve as features for downstream ML models.</p>
     </div>
     <div class="section-rule"></div>
   </section>
@@ -15,33 +15,42 @@
     <div class="span-12">
       <div class="card report-card">
         <div class="card-body">
-          <h5 class="card-title">Saved Collections</h5>
-          {% if collections %}
+          <h5 class="card-title">Data Lake</h5>
+          {% if entries_table %}
             <div class="table-responsive">
               <table class="table table-sm align-middle mb-0">
                 <thead>
                   <tr>
                     <th scope="col">Name</th>
-                    <th scope="col">Saved</th>
+                    <th scope="col">FRED ID</th>
                     <th scope="col">Regimes</th>
-                    <th scope="col">Regime Names</th>
+                    <th scope="col">Start</th>
+                    <th scope="col">Frequency</th>
+                    <th scope="col">Obs</th>
+                    <th scope="col">Missing</th>
                     <th scope="col" class="text-end">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {% for coll in collections %}
+                  {% for entry in entries_table %}
                     <tr>
-                      <th scope="row">{{ coll.name }}</th>
-                      <td>{{ coll.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-                      <td>{{ coll.n_regimes }}</td>
-                      <td>{{ coll.regime_names | join(', ') }}</td>
+                      <th scope="row">
+                        {{ entry.name }}
+                        {% if not entry.converged %}
+                          <span class="badge bg-warning text-dark ms-1" title="Model converged via retry — results may be less reliable">⚠ retry</span>
+                        {% endif %}
+                      </th>
+                      <td>{{ entry.fred_series_id }}</td>
+                      <td>{{ entry.k_regimes }}</td>
+                      <td>{{ entry.start_date }}</td>
+                      <td>{{ entry.frequency }}</td>
+                      <td>{{ entry.n_obs }}</td>
+                      <td>{{ entry.missing_obs }}</td>
                       <td class="text-end">
-                        <form method="post" action="{{ url_for('regime.load_saved_collection', key=coll.key) }}" class="d-inline">
-                          <button class="btn btn-sm btn-outline-secondary" type="submit">Load</button>
-                        </form>
-                        <form method="post" action="{{ url_for('regime.delete_saved_collection', key=coll.key) }}" class="d-inline">
-                          <input type="hidden" name="confirm" value="1">
-                          <button class="btn btn-sm btn-outline-danger" type="submit">Delete</button>
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('regime.regime_detection', view=entry.name) }}">View</a>
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('regime.download_regime_csv', name=entry.name) }}">CSV</a>
+                        <form method="post" action="{{ url_for('regime.remove_regime', name=entry.name) }}" class="d-inline">
+                          <button class="btn btn-sm btn-outline-danger" type="submit">Remove</button>
                         </form>
                       </td>
                     </tr>
@@ -49,8 +58,13 @@
                 </tbody>
               </table>
             </div>
+            <div class="mt-3">
+              <form method="post" action="{{ url_for('regime.clear_collection') }}" class="d-inline">
+                <button class="btn btn-sm btn-outline-danger" type="submit">Clear all</button>
+              </form>
+            </div>
           {% else %}
-            <p class="text-muted mb-0">No saved collections yet. Build a collection and save it from the main page.</p>
+            <p class="text-muted mb-0">No regimes in the data lake yet. Use the builder to fit and add regimes.</p>
           {% endif %}
           <div class="mt-3">
             <a class="btn btn-outline-secondary" href="{{ url_for('regime.regime_detection') }}">Back to builder</a>
