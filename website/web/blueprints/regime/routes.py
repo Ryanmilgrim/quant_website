@@ -177,6 +177,20 @@ def _infer_frequency(series: pd.Series) -> str:
             return freq_map.get(base, freq)
     except Exception:
         pass
+    # Fallback: estimate from median gap between observations
+    if len(series) >= 2:
+        median_days = float(
+            np.median(np.diff(series.index).astype("timedelta64[D]").astype(int))
+        )
+        if median_days <= 3:
+            return "Daily"
+        if median_days <= 10:
+            return "Weekly"
+        if median_days <= 45:
+            return "Monthly"
+        if median_days <= 120:
+            return "Quarterly"
+        return "Annual"
     return "Unknown"
 
 
@@ -230,6 +244,8 @@ def regime_detection():
             "train_end": cfg.train_end or "full",
             "switching_variance": cfg.switching_variance,
             "switching_trend": cfg.switching_trend,
+            "order": cfg.order,
+            "switching_ar": cfg.switching_ar,
             "converged": m.get("converged", True),
         })
 
@@ -265,6 +281,8 @@ def regime_detection():
             "k_regimes": detail_config.k_regimes,
             "switching_variance": detail_config.switching_variance,
             "switching_trend": detail_config.switching_trend,
+            "order": detail_config.order,
+            "switching_ar": detail_config.switching_ar,
             "train_end": detail_config.train_end or "",
             "description": detail_config.description or "",
             "name": detail_config.name,
@@ -316,6 +334,8 @@ def fit_regime():
         k_regimes = int(request.form.get("k_regimes", "2"))
         switching_variance = "switching_variance" in request.form
         switching_trend = "switching_trend" in request.form
+        order = int(request.form.get("order", "0") or "0")
+        switching_ar = "switching_ar" in request.form
         train_end = (request.form.get("train_end") or "").strip() or None
         description = (request.form.get("description") or "").strip()
 
@@ -334,6 +354,8 @@ def fit_regime():
             k_regimes=k_regimes,
             switching_variance=switching_variance,
             switching_trend=switching_trend,
+            order=order,
+            switching_ar=switching_ar,
             train_end=train_end,
             regime_labels=regime_labels,
         )
@@ -359,7 +381,7 @@ def fit_regime():
         collection.add(config, run)
         _set_collection(collection)
 
-        flash(f"Fitted regime '{regime_name}' and added to data lake.", "success")
+        flash(f"Fitted signal '{regime_name}' and added to data lake.", "success")
         return redirect(url_for("regime.regime_detection"))
 
     except ValueError as exc:
@@ -370,7 +392,7 @@ def fit_regime():
             msg += " Try submitting again, or reduce the number of regimes."
         flash(msg, "danger")
     except Exception as exc:
-        flash(f"Failed to fit regime: {exc}", "danger")
+        flash(f"Failed to fit signal: {exc}", "danger")
 
     return redirect(url_for("regime.regime_detection"))
 
@@ -394,7 +416,7 @@ def remove_regime(name: str):
         _set_collection(collection)
         flash(f"Removed '{name}' from data lake.", "success")
     except KeyError:
-        flash(f"Regime '{name}' not found.", "warning")
+        flash(f"Signal '{name}' not found.", "warning")
     return redirect(url_for("regime.regime_detection"))
 
 
@@ -411,6 +433,8 @@ def refit_regime(name: str):
         k_regimes = int(request.form.get("k_regimes", cfg_old.k_regimes))
         switching_variance = "switching_variance" in request.form
         switching_trend = "switching_trend" in request.form
+        order = int(request.form.get("order", cfg_old.order) or "0")
+        switching_ar = "switching_ar" in request.form
         train_end = (request.form.get("train_end") or "").strip() or None
 
         config = RegimeConfig(
@@ -421,6 +445,8 @@ def refit_regime(name: str):
             k_regimes=k_regimes,
             switching_variance=switching_variance,
             switching_trend=switching_trend,
+            order=order,
+            switching_ar=switching_ar,
             train_end=train_end,
         )
 
@@ -438,7 +464,7 @@ def refit_regime(name: str):
         return redirect(url_for("regime.regime_detection", view=name))
 
     except KeyError:
-        flash(f"Regime '{name}' not found.", "warning")
+        flash(f"Signal '{name}' not found.", "warning")
     except ValueError as exc:
         flash(str(exc), "danger")
     except RuntimeError as exc:
@@ -447,7 +473,7 @@ def refit_regime(name: str):
             msg += " Try submitting again, or reduce the number of regimes."
         flash(msg, "danger")
     except Exception as exc:
-        flash(f"Failed to refit regime: {exc}", "danger")
+        flash(f"Failed to refit signal: {exc}", "danger")
 
     return redirect(url_for("regime.regime_detection", view=name))
 
@@ -482,7 +508,7 @@ def label_regime(name: str):
         _set_collection(collection)
         flash(f"Labels updated for '{name}'.", "success")
     except KeyError:
-        flash(f"Regime '{name}' not found.", "warning")
+        flash(f"Signal '{name}' not found.", "warning")
     except Exception as exc:
         flash(f"Failed to update labels: {exc}", "danger")
     return redirect(url_for("regime.regime_detection", view=name))
@@ -522,6 +548,8 @@ def preview_regime():
         k_regimes = int(request.form.get("k_regimes", "2"))
         switching_variance = request.form.get("switching_variance") == "true"
         switching_trend = request.form.get("switching_trend") == "true"
+        order = int(request.form.get("order", "0") or "0")
+        switching_ar = request.form.get("switching_ar") == "true"
         train_end = (request.form.get("train_end") or "").strip() or None
 
         raw_series = fetch_fred_series(fred_id)
@@ -531,6 +559,8 @@ def preview_regime():
             k_regimes=k_regimes,
             switching_variance=switching_variance,
             switching_trend=switching_trend,
+            order=order,
+            switching_ar=switching_ar,
         )
         run = model.run(transformed, name=fred_id, train_end=train_end)
 
@@ -593,7 +623,7 @@ def download_regime_csv(name: str):
     try:
         cfg, run = collection.get(name)
     except KeyError:
-        flash(f"Regime '{name}' not found.", "danger")
+        flash(f"Signal '{name}' not found.", "danger")
         return redirect(url_for("regime.regime_detection"))
 
     probs = run.smoothed_probabilities.copy()
@@ -675,13 +705,13 @@ def save_preset_route():
     regime_name = (request.form.get("regime_name") or "").strip()
 
     if not regime_name:
-        flash("Select a regime to save as preset.", "warning")
+        flash("Select a signal to save as preset.", "warning")
         return redirect(url_for("regime.regime_detection"))
 
     try:
         cfg, _ = collection.get(regime_name)
     except KeyError:
-        flash(f"Regime '{regime_name}' not found.", "warning")
+        flash(f"Signal '{regime_name}' not found.", "warning")
         return redirect(url_for("regime.regime_detection"))
 
     preset_name = (request.form.get("preset_name") or regime_name).strip()
@@ -717,6 +747,8 @@ def list_presets_json():
                 "k_regimes": p.config.k_regimes,
                 "switching_variance": p.config.switching_variance,
                 "switching_trend": p.config.switching_trend,
+                "order": p.config.order,
+                "switching_ar": p.config.switching_ar,
                 "train_end": p.config.train_end,
             }
             for p in presets
