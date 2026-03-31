@@ -1,5 +1,10 @@
 # TODO — Quant Dashboard Roadmap
 
+## Recently Completed
+
+- [x] **MarkovAutoregression** — AR Order and Switching AR support in regime signals (Hamilton 1989)
+- [x] **Regime signal polish** — Annualized stats, NaN-safe JSON, regime overlay legend, param name remapping after reorder, AIC/BIC near Fit button, frequency inference fallback, "regime signal" UI rename, AR controls layout
+
 ## Rename: Factor Analysis → Risk Analysis
 
 - [ ] Rename blueprint folder `factor/` → `risk/` (or update route prefix)

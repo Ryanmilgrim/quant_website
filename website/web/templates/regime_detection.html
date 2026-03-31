@@ -39,6 +39,8 @@
                               data-k="{{ p.config.k_regimes }}"
                               data-sv="{{ p.config.switching_variance | lower }}"
                               data-st="{{ p.config.switching_trend | lower }}"
+                              data-order="{{ p.config.order }}"
+                              data-sar="{{ p.config.switching_ar | lower }}"
                               data-te="{{ p.config.train_end or '' }}"
                               data-desc="{{ p.config.description }}">
                         {{ p.name }} ({{ p.config.fred_series_id }})
@@ -93,8 +95,7 @@
             <div id="chartLoading" class="text-muted mt-3">Loading series...</div>
             <div id="chartError" class="text-danger mt-3" style="display:none"></div>
             <div id="chartResults" style="display:none">
-              <div class="d-flex justify-content-between align-items-center mt-3 mb-2">
-                <span class="text-muted small" id="chartMetrics"></span>
+              <div class="d-flex justify-content-end align-items-center mt-3 mb-2">
                 <select class="form-select form-select-sm w-auto" id="chartMode" style="display:none"></select>
               </div>
               <div id="mainChart" class="chart-container"></div>
@@ -114,7 +115,7 @@
                 </div>
                 <div class="col-md-5">
                   <table class="table table-sm mb-0" id="previewRegimeTable">
-                    <thead><tr><th>Regime</th><th>Label</th><th>Mean (ann.)</th><th>Std Dev (ann.)</th><th>E[Duration] (yrs)</th></tr></thead>
+                    <thead><tr><th>Signal</th><th>Label</th><th>Mean (ann.)</th><th>Std Dev (ann.)</th><th>E[Duration] (yrs)</th></tr></thead>
                     <tbody></tbody>
                   </table>
                 </div>
@@ -130,13 +131,27 @@
                 <label class="form-label" for="train_end">Training cutoff</label>
                 <input type="date" class="form-control" id="train_end" name="train_end" value="{{ default_train_end }}" title="Leave blank for full-sample fit.">
               </div>
-              <div class="col-md-2">
+              <div class="col-auto">
                 <label class="form-label" for="k_regimes">Regimes</label>
-                <select class="form-select" id="k_regimes" name="k_regimes">
+                <select class="form-select" id="k_regimes" name="k_regimes" style="width: 5rem;">
                   {% for k in [2, 3, 4, 5] %}
                     <option value="{{ k }}" {% if k == 2 %}selected{% endif %}>{{ k }}</option>
                   {% endfor %}
                 </select>
+              </div>
+              <div class="col-auto">
+                <label class="form-label" for="order">AR Order</label>
+                <select class="form-select" id="order" name="order" style="width: 5rem;">
+                  {% for o in range(9) %}
+                    <option value="{{ o }}" {% if o == 0 %}selected{% endif %}>{{ o }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-auto" id="switching_ar_group" style="opacity: 0.5;">
+                <div class="form-check mt-4">
+                  <input class="form-check-input" type="checkbox" id="switching_ar" name="switching_ar" disabled>
+                  <label class="form-check-label" for="switching_ar">Switching AR</label>
+                </div>
               </div>
               <div class="col-auto">
                 <div class="form-check mt-4">
@@ -154,6 +169,7 @@
                 <button class="btn btn-primary mt-4" type="button" id="fitModelBtn">Fit Model</button>
               </div>
             </div>
+            <div class="text-muted small mt-2" id="fitMetrics" style="display:none"></div>
           </div>
 
           {# ── Save controls (State 3, shown after fit) ── #}
@@ -168,7 +184,7 @@
               <input type="hidden" name="train_end" id="save_train_end">
               <div class="row g-3 align-items-end">
                 <div class="col-md-4">
-                  <label class="form-label" for="regime_name">Regime name</label>
+                  <label class="form-label" for="regime_name">Signal name</label>
                   <input type="text" class="form-control" id="regime_name" name="regime_name" placeholder="GDP Recession" required>
                 </div>
                 <div class="col-md-5">
@@ -220,6 +236,10 @@
                   <tr><th scope="row">Transform</th><td>{{ detail_config.transform.description }}</td></tr>
                   <tr><th scope="row">Switching Var</th><td>{{ 'Yes' if detail_config.switching_variance else 'No' }}</td></tr>
                   <tr><th scope="row">Switching Trend</th><td>{{ 'Yes' if detail_config.switching_trend else 'No' }}</td></tr>
+                  {% if detail_config.order > 0 %}
+                    <tr><th scope="row">AR Order</th><td>{{ detail_config.order }}</td></tr>
+                    <tr><th scope="row">Switching AR</th><td>{{ 'Yes' if detail_config.switching_ar else 'No' }}</td></tr>
+                  {% endif %}
                 </tbody>
               </table>
             </details>
@@ -229,13 +249,13 @@
       <div class="span-7">
         <div class="card report-card">
           <div class="card-body">
-            <h5 class="card-title">Regime Parameters</h5>
+            <h5 class="card-title">Signal Parameters</h5>
             {% if detail_summary.regime_table %}
               <form method="post" action="{{ url_for('regime.label_regime', name=detail_config.name) }}">
                 <table class="table table-sm mb-2">
                   <thead>
                     <tr>
-                      <th scope="col">Regime</th>
+                      <th scope="col">Signal</th>
                       <th scope="col">Label</th>
                       <th scope="col">Mean (ann.)</th>
                       <th scope="col">Std Dev (ann.)</th>
@@ -254,7 +274,7 @@
                     {% endfor %}
                   </tbody>
                 </table>
-                <button class="btn btn-sm btn-outline-secondary" type="submit">Save labels</button>
+                <button class="btn btn-sm btn-outline-secondary" type="submit">Update signal labels</button>
               </form>
             {% endif %}
             {% if detail_summary.metrics %}
@@ -290,13 +310,13 @@
                   </thead>
                   <tbody>
                     {% for stat in detail_summary.regression_stats %}
-                      <tr{% if stat.significant is defined and not stat.significant %} class="table-warning"{% endif %}>
+                      <tr{% if stat.significant is defined and stat.significant is not none and not stat.significant %} class="table-warning"{% endif %}>
                         <td><code>{{ stat.name }}</code></td>
-                        <td>{{ '%.6f' | format(stat.coef) }}</td>
-                        <td>{{ '%.6f' | format(stat.std_err) if stat.std_err is defined else '&mdash;' }}</td>
-                        <td>{{ '%.6f' | format(stat.pvalue) if stat.pvalue is defined else '&mdash;' }}</td>
+                        <td>{{ '%.6f' | format(stat.coef) if stat.coef is not none else '&mdash;' }}</td>
+                        <td>{{ '%.6f' | format(stat.std_err) if stat.std_err is defined and stat.std_err is not none else '&mdash;' }}</td>
+                        <td>{{ '%.6f' | format(stat.pvalue) if stat.pvalue is defined and stat.pvalue is not none else '&mdash;' }}</td>
                         <td>
-                          {% if stat.significant is defined %}
+                          {% if stat.significant is defined and stat.significant is not none %}
                             {% if stat.significant %}
                               <span class="text-success fw-bold">***</span>
                             {% else %}
@@ -321,13 +341,13 @@
       <div class="span-12">
         <div class="card report-card">
           <div class="card-body">
-            <h5 class="card-title">Refit Model</h5>
+            <h5 class="card-title">Refit Signal</h5>
             <p class="text-muted small mb-3">Adjust model settings and refit <strong>{{ detail_config.name }}</strong> using the same FRED series and transform.</p>
             <form method="post" action="{{ url_for('regime.refit_regime', name=detail_config.name) }}" class="app-form">
               <div class="row g-3 align-items-end">
-                <div class="col-md-2">
+                <div class="col-auto">
                   <label class="form-label" for="refit_k_regimes">Regimes</label>
-                  <select class="form-select" id="refit_k_regimes" name="k_regimes">
+                  <select class="form-select" id="refit_k_regimes" name="k_regimes" style="width: 5rem;">
                     {% for k in [2, 3, 4, 5] %}
                       <option value="{{ k }}" {% if k == detail_config.k_regimes %}selected{% endif %}>{{ k }}</option>
                     {% endfor %}
@@ -336,6 +356,20 @@
                 <div class="col-md-3">
                   <label class="form-label" for="refit_train_end">Training cutoff</label>
                   <input type="date" class="form-control" id="refit_train_end" name="train_end" value="{{ detail_config.train_end or '' }}">
+                </div>
+                <div class="col-auto">
+                  <label class="form-label" for="refit_order">AR Order</label>
+                  <select class="form-select" id="refit_order" name="order" style="width: 5rem;">
+                    {% for o in range(9) %}
+                      <option value="{{ o }}" {% if o == detail_config.order %}selected{% endif %}>{{ o }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="col-auto" id="refit_switching_ar_group" {% if detail_config.order == 0 %}style="opacity: 0.5;"{% else %}style="opacity: 1;"{% endif %}>
+                  <div class="form-check mt-4">
+                    <input class="form-check-input" type="checkbox" id="refit_sar" name="switching_ar" {% if detail_config.switching_ar %}checked{% endif %} {% if detail_config.order == 0 %}disabled{% endif %}>
+                    <label class="form-check-label" for="refit_sar">Switching AR</label>
+                  </div>
                 </div>
                 <div class="col-auto">
                   <div class="form-check mt-4">
@@ -482,14 +516,17 @@
       }, plotCfg);
     }
 
-    function renderSeriesWithOverlay(elementId, chartData, assignments, trainEndDate) {
+    function renderSeriesWithOverlay(elementId, chartData, assignments, trainEndDate, regimeLabels) {
       if (!chartData || !chartData.series || !chartData.series.length || !assignments) return;
       const sd = chartData.series[0];
       const shapes = [];
+      const uniqueRegimes = new Set();
       if (assignments.regimes && assignments.regimes.length > 1) {
         let prev = assignments.regimes[0], start = assignments.x[0];
+        uniqueRegimes.add(prev);
         for (let i = 1; i <= assignments.regimes.length; i++) {
           const curr = i < assignments.regimes.length ? assignments.regimes[i] : -1;
+          if (curr >= 0) uniqueRegimes.add(curr);
           if (curr !== prev) {
             const endX = i < assignments.x.length ? assignments.x[i] : assignments.x[assignments.x.length - 1];
             shapes.push({ type: 'rect', xref: 'x', yref: 'paper', x0: start, x1: endX, y0: 0, y1: 1,
@@ -506,16 +543,26 @@
           line: { color: '#e63946', width: 2, dash: 'dash' },
         });
       }
-      const title = chartData.title || '';
-      Plotly.newPlot(elementId, [{
+      // Legend traces — one invisible bar per regime for color swatches
+      const traces = [{
         type: 'scatter', mode: 'lines', name: sd.name, x: sd.x, y: sd.y,
         line: { color: '#001f38', width: 1.5 },
         hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:,.4f}<extra></extra>',
-      }], {
-        ...baseLayout, shapes,
+      }];
+      const labels = regimeLabels || {};
+      [...uniqueRegimes].sort().forEach(r => {
+        traces.push({
+          type: 'bar', name: labels[r] || `Regime ${r}`, x: [null], y: [null],
+          marker: { color: REGIME_COLORS[r % REGIME_COLORS.length] + '60' },
+          showlegend: true, hoverinfo: 'skip',
+        });
+      });
+      const title = chartData.title || '';
+      Plotly.newPlot(elementId, traces, {
+        ...baseLayout, shapes, barmode: 'overlay',
         title: title ? { text: title, font: { size: 14, color: '#001f38' }, x: 0.01 } : undefined,
         yaxis: { ...baseLayout.yaxis, title: '' },
-        showlegend: false,
+        showlegend: true,
       }, plotCfg);
     }
 
@@ -615,6 +662,23 @@
       chartModeSel.onchange = () => renderMainChart(chartModeSel.value);
     }
 
+    function _getCurrentRegimeLabels() {
+      // Read labels from preview label inputs if they exist, else from previewData
+      const labels = {};
+      document.querySelectorAll('[id^="preview_label_"]').forEach(el => {
+        const idx = parseInt(el.id.replace('preview_label_', ''));
+        if (el.value.trim()) labels[idx] = el.value.trim();
+      });
+      if (Object.keys(labels).length) return labels;
+      // Fallback: read from previewData.regime_table
+      if (previewData && previewData.regime_table) {
+        previewData.regime_table.forEach(r => {
+          if (r.label) labels[r.regime] = r.label;
+        });
+      }
+      return labels;
+    }
+
     function renderMainChart(mode) {
       const te = document.getElementById('train_end').value || null;
 
@@ -643,7 +707,9 @@
       const fitTe = previewData.train_end_marker ? previewData.train_end_marker.date : null;
       const name = previewData.metrics ? previewData.metrics.series_name : '';
       if (mode === 'series') {
-        renderSeriesWithOverlay('mainChart', previewData.chart_series, previewData.regime_assignments, fitTe);
+        // Build regime labels map from regime_table or preview label inputs
+        const rl = _getCurrentRegimeLabels();
+        renderSeriesWithOverlay('mainChart', previewData.chart_series, previewData.regime_assignments, fitTe, rl);
       } else if (mode === 'probs') {
         renderStackedProbs('mainChart', previewData.chart_probabilities, fitTe, name);
       } else if (mode === 'forecast') {
@@ -657,6 +723,31 @@
     function toggleWindow() {
       const needsWindow = ['yoy_change', 'rolling_mean'].includes(transformSel.value);
       windowSec.style.display = needsWindow ? '' : 'none';
+    }
+
+    /* ── Show/hide Switching AR checkbox based on AR Order ── */
+    const orderSel = document.getElementById('order');
+    const arGroup = document.getElementById('switching_ar_group');
+    function toggleArGroup() {
+      const el = document.getElementById('switching_ar');
+      const disabled = parseInt(orderSel.value) === 0;
+      el.disabled = disabled;
+      if (disabled) el.checked = false;
+      arGroup.style.opacity = disabled ? '0.5' : '1';
+    }
+    orderSel.addEventListener('change', toggleArGroup);
+
+    /* ── Refit form: enable/disable Switching AR ── */
+    const refitOrderSel = document.getElementById('refit_order');
+    const refitArGroup = document.getElementById('refit_switching_ar_group');
+    if (refitOrderSel && refitArGroup) {
+      refitOrderSel.addEventListener('change', function () {
+        const el = document.getElementById('refit_sar');
+        const disabled = parseInt(this.value) === 0;
+        el.disabled = disabled;
+        if (disabled) el.checked = false;
+        refitArGroup.style.opacity = disabled ? '0.5' : '1';
+      });
     }
     transformSel.addEventListener('change', toggleWindow);
     toggleWindow();
@@ -703,6 +794,7 @@
         loadSummary.style.display = 'none';
         configureControls.style.display = 'none';
         saveControls.style.display = 'none';
+        document.getElementById('fitMetrics').style.display = 'none';
       } else if (state === STATES.CONFIGURE) {
         badge.textContent = '2';
         titleText.innerHTML = 'Configure &amp; Fit Model';
@@ -818,6 +910,12 @@
     document.getElementById('fitModelBtn').addEventListener('click', function () {
       if (!inspectState) return;
 
+      // Clear stale labels from any previous fit
+      const existingBtn = document.getElementById('updateLabelsBtn');
+      if (existingBtn) existingBtn.remove();
+      const rtbody = document.querySelector('#previewRegimeTable tbody');
+      if (rtbody) rtbody.innerHTML = '';
+
       const loading = document.getElementById('chartLoading');
       const error = document.getElementById('chartError');
 
@@ -832,6 +930,8 @@
       formData.append('k_regimes', document.getElementById('k_regimes').value);
       formData.append('switching_variance', document.getElementById('switching_variance').checked ? 'true' : 'false');
       formData.append('switching_trend', document.getElementById('switching_trend').checked ? 'true' : 'false');
+      formData.append('order', document.getElementById('order').value);
+      formData.append('switching_ar', document.getElementById('switching_ar').checked ? 'true' : 'false');
       formData.append('train_end', document.getElementById('train_end').value);
 
       fetch('{{ url_for("regime.preview_regime") }}', { method: 'POST', body: formData })
@@ -850,12 +950,14 @@
           chartModeSel.value = 'series';
           renderMainChart('series');
 
-          // Metrics line
+          // Metrics line (shown near Fit Model button)
           if (data.metrics) {
             const m = data.metrics;
-            document.getElementById('chartMetrics').textContent =
+            const fm = document.getElementById('fitMetrics');
+            fm.textContent =
               `AIC: ${m.aic} \u00b7 BIC: ${m.bic} \u00b7 Log-L: ${m.log_likelihood}` +
               (m.converged ? ' \u00b7 Converged' : ' \u00b7 NOT converged');
+            fm.style.display = '';
           }
 
           // Regression stats
@@ -886,11 +988,24 @@
                 rtbody.innerHTML += `<tr>
                   <td>${r.regime}</td>
                   <td><input type="text" class="form-control form-control-sm" id="preview_label_${r.regime}" value="${r.label || ''}" placeholder="e.g. Bull" style="min-width: 80px;"></td>
-                  <td>${r.mean.toFixed(2)}%</td>
+                  <td>${r.mean !== null ? r.mean.toFixed(2) + '%' : '&mdash;'}</td>
                   <td>${r.std !== null && r.std !== undefined ? r.std.toFixed(2) + '%' : '&mdash;'}</td>
                   <td>${r.expected_duration ? r.expected_duration.toFixed(2) + ' yrs' : '&mdash;'}</td>
                 </tr>`;
               });
+              // Add "Update Labels" button to refresh chart legend
+              const existingBtn = document.getElementById('updateLabelsBtn');
+              if (!existingBtn) {
+                const btn = document.createElement('button');
+                btn.type = 'button'; btn.id = 'updateLabelsBtn';
+                btn.className = 'btn btn-sm btn-outline-secondary mt-2';
+                btn.textContent = 'Update chart labels';
+                btn.addEventListener('click', () => {
+                  const chartModeSel = document.getElementById('chartMode');
+                  if (chartModeSel.value === 'series') renderMainChart('series');
+                });
+                document.getElementById('previewRegimeTable').parentNode.appendChild(btn);
+              }
             }
           } else {
             statsSection.style.display = 'none';
@@ -906,6 +1021,8 @@
             fitState = {
               switching_variance: document.getElementById('switching_variance').checked,
               switching_trend: document.getElementById('switching_trend').checked,
+              order: parseInt(document.getElementById('order').value) || 0,
+              switching_ar: document.getElementById('switching_ar').checked,
             };
             setWorkflowState(STATES.FITTED);
           }
@@ -924,7 +1041,7 @@
 
       const enteredName = document.getElementById('regime_name').value.trim();
       if (_existingNames.includes(enteredName)) {
-        if (!confirm('A regime named "' + enteredName + '" already exists. This will overwrite it. Continue?')) {
+        if (!confirm('A signal named "' + enteredName + '" already exists. This will overwrite it. Continue?')) {
           event.preventDefault();
           return;
         }
@@ -942,6 +1059,18 @@
         inp.type = 'hidden'; inp.name = 'switching_trend'; inp.value = 'on';
         inp.className = 'dynamic-switch';
         this.appendChild(inp);
+      }
+      if (fitState && fitState.order > 0) {
+        const inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'order'; inp.value = fitState.order;
+        inp.className = 'dynamic-switch';
+        this.appendChild(inp);
+        if (fitState.switching_ar) {
+          const inp2 = document.createElement('input');
+          inp2.type = 'hidden'; inp2.name = 'switching_ar'; inp2.value = 'on';
+          inp2.className = 'dynamic-switch';
+          this.appendChild(inp2);
+        }
       }
       document.querySelectorAll('[id^="preview_label_"]').forEach(el => {
         if (el.value.trim()) {
@@ -990,6 +1119,9 @@
         document.getElementById('k_regimes').value = opt.dataset.k || '2';
         document.getElementById('switching_variance').checked = opt.dataset.sv === 'true';
         document.getElementById('switching_trend').checked = opt.dataset.st === 'true';
+        document.getElementById('order').value = opt.dataset.order || '0';
+        document.getElementById('switching_ar').checked = opt.dataset.sar === 'true';
+        toggleArGroup();
         document.getElementById('train_end').value = opt.dataset.te || '';
         toggleWindow();
         document.getElementById('loadDataBtn').click();
@@ -1009,6 +1141,9 @@
         document.getElementById('k_regimes').value = viewCfg.k_regimes;
         document.getElementById('switching_variance').checked = viewCfg.switching_variance;
         document.getElementById('switching_trend').checked = viewCfg.switching_trend;
+        document.getElementById('order').value = viewCfg.order || 0;
+        document.getElementById('switching_ar').checked = viewCfg.switching_ar || false;
+        toggleArGroup();
         document.getElementById('train_end').value = viewCfg.train_end;
         document.getElementById('regime_name').value = viewCfg.name;
         document.getElementById('description').value = viewCfg.description;
@@ -1028,6 +1163,8 @@
         fitState = {
           switching_variance: viewCfg.switching_variance,
           switching_trend: viewCfg.switching_trend,
+          order: viewCfg.order || 0,
+          switching_ar: viewCfg.switching_ar || false,
         };
 
         // Show chart with full fit options
@@ -1038,12 +1175,14 @@
         renderMainChart('series');
         chartRendered = true;
 
-        // Show metrics
+        // Show metrics near Fit Model button
         if (detailData.metrics) {
           const m = detailData.metrics;
-          document.getElementById('chartMetrics').textContent =
+          const fm = document.getElementById('fitMetrics');
+          fm.textContent =
             `AIC: ${m.aic} \u00b7 BIC: ${m.bic} \u00b7 Log-L: ${m.log_likelihood}` +
             (m.converged ? ' \u00b7 Converged' : ' \u00b7 NOT converged');
+          fm.style.display = '';
         }
 
         // Populate summary badges
@@ -1069,6 +1208,9 @@
         document.getElementById('k_regimes').value = viewCfg.k_regimes;
         document.getElementById('switching_variance').checked = viewCfg.switching_variance;
         document.getElementById('switching_trend').checked = viewCfg.switching_trend;
+        document.getElementById('order').value = viewCfg.order || 0;
+        document.getElementById('switching_ar').checked = viewCfg.switching_ar || false;
+        toggleArGroup();
         document.getElementById('train_end').value = viewCfg.train_end;
         document.getElementById('regime_name').value = viewCfg.name;
         document.getElementById('description').value = viewCfg.description;
@@ -1083,6 +1225,9 @@
       document.getElementById('k_regimes').value = '2';
       document.getElementById('switching_variance').checked = true;
       document.getElementById('switching_trend').checked = true;
+      document.getElementById('order').value = '0';
+      document.getElementById('switching_ar').checked = false;
+      toggleArGroup();
       document.getElementById('train_end').value = '{{ default_train_end }}';
       document.getElementById('regime_name').value = '';
       document.getElementById('description').value = '';
