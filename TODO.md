@@ -1,35 +1,32 @@
-# TODO — Quant Dashboard Roadmap
+# TODO -- Quant Dashboard Roadmap
 
 ## Recently Completed
 
-- [x] **MarkovAutoregression** — AR Order and Switching AR support in regime signals (Hamilton 1989)
-- [x] **Regime signal polish** — Annualized stats, NaN-safe JSON, regime overlay legend, param name remapping after reorder, AIC/BIC near Fit button, frequency inference fallback, "regime signal" UI rename, AR controls layout
+- [x] **MarkovAutoregression** -- AR Order and Switching AR support in regime signals (Hamilton 1989)
+- [x] **Regime signal polish** -- Annualized stats, NaN-safe JSON, regime overlay legend, param name remapping after reorder, AIC/BIC near Fit button, frequency inference fallback, "regime signal" UI rename, AR controls layout
+- [x] **Rename: Factor Analysis -> Risk Model** -- Blueprint, routes, templates, nav, homepage cards all updated
+- [x] **Theme & Styling Cleanup** -- CSS custom properties defined; hardcoded colors migrated to variables; info-tip tooltips and chart-source citation classes added
+- [x] **Descriptions & Transparency** -- Homepage rewritten with richer module descriptions; collapsible Model Overview sections added to all modules; tooltips on form labels; chart source citations; Plotly theme centralized in base.html
+- [x] **Section numbering fix** -- Regime Signals corrected to 05; Risk Model saved view corrected to 06; nav order matches numbering
 
 ## Bugs / Known Issues
 
-- [ ] **Regression summary mismatch on view load** — When viewing a saved signal from the data lake, the regression summary (significant variables table) does not render identically to how it appears on the builder page after fitting. Investigate why the view-mode path produces different output than the fit-preview path.
+- [ ] **Regression summary mismatch on view load** -- When viewing a saved signal from the data lake, the regression summary (significant variables table) does not render identically to how it appears on the builder page after fitting. Investigate why the view-mode path produces different output than the fit-preview path.
 
-## Rename: Factor Analysis → Risk Analysis
+## Cleanup (minor)
 
-- [ ] Rename blueprint folder `factor/` → `risk/` (or update route prefix)
-- [ ] Rename all references in templates, nav links, and homepage cards
-- [ ] Update blueprint registration in `create_app()`
-- [ ] Rename `website/lib/analysis/` modules as needed
-- [ ] Update URL routes (`/factor` → `/risk` or similar)
+- [ ] Delete empty `website/web/blueprints/factor/` directory
+- [ ] Remove backward-compat aliases in quant_toolkit (FactorModel, FactorRun, etc.) once no code references them
 
-## Theme & Styling Cleanup
+## Deployment
 
-- [ ] Define CSS custom properties for the BNY-inspired color palette
-- [ ] Migrate hardcoded colors in `styles.css` to use the new tokens
-- [ ] Ensure mobile responsiveness is solid throughout
-- [ ] Minor polish: consistent spacing, card styles, typography hierarchy
-
-## Descriptions & Transparency
-
-- [ ] Add explanation bubbles / info tooltips across all modules for users unfamiliar with the quant_toolkit library
-- [ ] Write better descriptions for each module on the homepage
-- [ ] Add methodology documentation or inline explanations for each analysis tool
-- [ ] Improve chart labeling and interactivity (Plotly defaults)
+- [ ] Add `gunicorn` to `requirements.txt`
+- [ ] Create `Dockerfile` for containerized deployment
+- [ ] Create `render.yaml` or `Procfile` for PaaS deployment
+- [ ] Set up production config (secret key, debug=False)
+- [ ] Purchase and configure custom domain
+- [ ] Deploy to hosting platform (Render recommended)
+- [ ] Verify `quant-toolkit` git dependency installs in production build
 
 ## Future Projects
 
@@ -43,25 +40,15 @@
 - [ ] Add simulation functionality to the existing Black-Scholes calculator
 - [ ] Incorporate Monte Carlo simulation using the underlying risk model analysis
 - [ ] Compare the volatility surface of price differences (goal: flatter vol surface)
-- [ ] Depends on: Risk Analysis module
+- [ ] Depends on: Risk Model module
 
 ### Machine Learning Forecasting
 
 - [ ] Build ML-based forecasting for asset class returns
-- [ ] Built on top of the risk/factor analysis and regime detection analysis
-- [ ] Depends on: Risk Analysis, regime detection
+- [ ] Built on top of the risk model and regime detection analysis
+- [ ] Depends on: Risk Model, regime detection
 
 ### Optimization & Backtesting Library
 
 - [ ] Portfolio optimization library with backtesting functionality for dynamic asset allocation
-- [ ] Depends on: ML Forecasting, Benchmark Style Analysis, Risk Analysis
-
-## Deployment
-
-- [ ] Add `gunicorn` to `requirements.txt`
-- [ ] Create `Dockerfile` for containerized deployment
-- [ ] Create `render.yaml` or `Procfile` for PaaS deployment
-- [ ] Set up production config (secret key, debug=False)
-- [ ] Purchase and configure custom domain
-- [ ] Deploy to hosting platform (Render recommended)
-- [ ] Verify `quant-toolkit` git dependency installs in production build
+- [ ] Depends on: ML Forecasting, Benchmark Style Analysis, Risk Model

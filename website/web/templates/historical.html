@@ -7,14 +7,48 @@
       <p class="section-kicker">Benchmark studio</p>
       <h2 class="section-title">Investment Universe &ndash; Benchmark Composition</h2>
       <p class="section-lede">Select the assets that form your investment universe. This will anchor your benchmark portfolio and downstream performance comparisons.</p>
-      <p class="section-note">The tool relies on Fama-French daily industry portfolios for long, academically vetted history. Log returns keep compounding consistent and avoid downstream math surprises. Choose the industry granularity, then view how that benchmark would have evolved over time. Benchmarks are value-weighted; switch to log growth to spot long-run compounding.</p>
+      <p class="section-note">Practitioners use industry portfolios to benchmark sector rotation strategies, attribute performance to industry tilts, and stress-test allocation across market cycles. This module defines the asset universe that anchors downstream style and risk analysis.</p>
+      <p class="section-note">Fama-French daily industry portfolios provide long, academically vetted history. Log returns keep compounding consistent. Benchmarks are value-weighted; switch to log growth to spot long-run compounding.</p>
     </div>
     <div class="section-rule"></div>
   </section>
 
+  <section class="report-grid">
+    <div class="span-12">
+      <div class="card report-card">
+        <div class="card-body p-4 p-lg-5 model-description">
+          <h5 class="card-title mb-0" role="button"
+              data-bs-toggle="collapse" data-bs-target="#universeOverviewCollapse"
+              aria-expanded="false" aria-controls="universeOverviewCollapse"
+              style="cursor: pointer;">
+            Data &amp; Methodology <small class="text-muted ms-2" style="font-size: 0.7em;">&#9660;</small>
+          </h5>
+          <div class="collapse" id="universeOverviewCollapse">
+            <div class="pt-3">
+              <h6>Fama-French Industry Portfolios</h6>
+              <p>Kenneth French maintains daily and monthly returns for value-weighted industry portfolios constructed from CRSP data. Each portfolio groups NYSE, AMEX, and NASDAQ stocks by SIC code into <em>N</em> industry buckets. Available granularities: 5, 10, 12, 17, 30, 38, and 48 industries.</p>
+
+              <h6>Log Returns</h6>
+              <p>This module displays log (continuously compounded) returns rather than simple returns. For a price series \(P_t\), the log return is \(r_t = \ln(P_t / P_{t-1})\). Log returns are additive over time, making multi-period compounding straightforward:</p>
+              <div class="math-block">
+                \[\sum r_t = \ln(P_T / P_0)\]
+              </div>
+
+              <h6>Indexed Growth</h6>
+              <p>The "indexed price growth" view compounds returns from a base of 100. The "log price growth" view shows the cumulative sum of log returns, which is equivalent to \(\ln(\text{Index}_T / 100)\). Both views tell the same compounding story; the log view linearizes exponential growth for easier visual comparison.</p>
+
+              <h6>Value Weighting</h6>
+              <p>Portfolios are value-weighted (market-cap weighted), so each stock contributes in proportion to its market capitalization. This reflects the investable opportunity set and is the natural benchmark for institutional portfolios.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <form method="post" class="row gy-3 gx-3 align-items-end mb-4 app-form">
     <div class="col-md-4">
-      <label class="form-label" for="universe">Industry Universe (benchmark building blocks)</label>
+      <label class="form-label" for="universe">Industry Universe (benchmark building blocks) <span class="info-tip" data-tooltip="Number of industry groups. Higher granularity gives narrower sectors but thinner portfolios." tabindex="0">?</span></label>
       <select class="form-select" id="universe" name="universe">
         {% for u in universes %}
           <option value="{{ u }}" {% if u|string == selected_universe %}selected{% endif %}>{{ u }} Industries</option>
@@ -22,7 +56,7 @@
       </select>
     </div>
     <div class="col-md-4">
-      <label class="form-label" for="transform">Growth display</label>
+      <label class="form-label" for="transform">Growth display <span class="info-tip" data-tooltip="Indexed growth compounds from base 100. Log growth shows cumulative log returns." tabindex="0">?</span></label>
       <select class="form-select" id="transform" name="transform">
         <option value="index" {% if transform == 'index' %}selected{% endif %}>Indexed price growth (base = 100)</option>
         <option value="log" {% if transform == 'log' %}selected{% endif %}>Log price growth</option>
@@ -52,6 +86,7 @@
         <h5 class="card-title">Benchmark growth from investment universe</h5>
         <p class="card-subtitle text-muted small mb-3">Historical performance of the selected universe; this shapes the benchmark you will compare future portfolios against. Choose the frequency to view either monthly or daily series, then use the growth dropdown to switch between indexed price levels and log price growth.</p>
         <div id="industryChart" class="chart-container"></div>
+        <p class="chart-source">Source: Kenneth R. French Data Library, Fama-French industry portfolios.</p>
       </div>
     </div>
     <script src="https://cdn.plot.ly/plotly-2.35.0.min.js" crossorigin="anonymous"></script>
@@ -73,7 +108,7 @@
           y: series.y,
           opacity: isBenchmark ? 1 : 0.3,
           line: {
-            color: isBenchmark ? '#2c9bac' : '#001f38',
+            color: isBenchmark ? QD_THEME.teal500 : QD_THEME.ink800,
             width: isBenchmark ? 2.5 : 1.2,
             shape: 'linear',
           },
@@ -86,58 +121,35 @@
       });
 
       const showRangeBreaks = chartData.frequency === 'daily';
-      const layout = {
-        margin: { t: 40, r: 20, b: 60, l: 60 },
-        font: {
-          family: 'Source Sans 3, Segoe UI, Tahoma, sans-serif',
-          color: '#001f38',
-        },
-        paper_bgcolor: 'rgba(0, 0, 0, 0)',
-        plot_bgcolor: '#ffffff',
-        xaxis: {
-          tickformat: "'%y",
-          automargin: true,
+      const baseLayout = structuredClone(QD_PLOTLY_BASE);
+      baseLayout.margin = { t: 60, r: 20, b: 60, l: 60 };
+      const layout = Object.assign(baseLayout, {
+        xaxis: Object.assign({}, baseLayout.xaxis, {
           rangebreaks: showRangeBreaks ? [{ bounds: ['sat', 'mon'] }] : [],
-          showline: true,
-          linecolor: '#d8dadb',
-          linewidth: 1,
-          gridcolor: 'rgba(216, 218, 219, 0.4)',
-          tickfont: { color: '#667d89' },
-          titlefont: { color: '#001f38' },
-          zeroline: false,
-        },
-        yaxis: {
+        }),
+        yaxis: Object.assign({}, baseLayout.yaxis, {
           title: chartData.y_axis_title || 'Benchmark index level',
           tickformat: chartData.y_axis_title && chartData.y_axis_title.toLowerCase().includes('log') ? '.2f' : ',.0f',
-          automargin: true,
-          showline: true,
-          linecolor: '#d8dadb',
-          linewidth: 1,
-          gridcolor: 'rgba(216, 218, 219, 0.4)',
-          tickfont: { color: '#667d89' },
-          titlefont: { color: '#001f38' },
-          zeroline: false,
-        },
+        }),
         legend: {
           orientation: 'h',
           y: 1.08,
           x: 1,
           xanchor: 'right',
           title: { text: '' },
-          font: { color: '#667d89' },
+          font: { color: QD_THEME.muted },
         },
         showlegend: true,
-        hovermode: 'closest',
         hoverlabel: {
-          bgcolor: '#ffffff',
-          bordercolor: '#d8dadb',
-          font: { color: '#001f38' },
+          bgcolor: QD_THEME.paper,
+          bordercolor: QD_THEME.border,
+          font: { color: QD_THEME.ink800 },
         },
-      };
+      });
 
       const chartContainer = document.getElementById('industryChart');
       Plotly.purge(chartContainer);
-      Plotly.newPlot(chartContainer, traces, layout, { displaylogo: false, responsive: true });
+      Plotly.newPlot(chartContainer, traces, layout, QD_PLOTLY_CONFIG);
     </script>
   {% else %}
     <p class="text-muted">No chart data available for the selected configuration.</p>

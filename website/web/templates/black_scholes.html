@@ -7,33 +7,102 @@
       <p class="section-kicker">Options lab</p>
       <h2 class="section-title">Black-Scholes Option Pricing</h2>
       <p class="section-lede">Price European calls and puts with clear inputs and deterministic math.</p>
+      <p class="section-note">Derivatives desks use Black-Scholes as a baseline valuation for European options. The model's assumptions &mdash; constant volatility, no dividends, continuous trading &mdash; make it a useful benchmark even when real-world pricing departs from it.</p>
     </div>
     <div class="section-rule"></div>
   </section>
 
+  <section class="report-grid">
+    <div class="span-12">
+      <div class="card report-card">
+        <div class="card-body p-4 p-lg-5 model-description">
+          <h5 class="card-title mb-0" role="button"
+              data-bs-toggle="collapse" data-bs-target="#bsOverviewCollapse"
+              aria-expanded="false" aria-controls="bsOverviewCollapse"
+              style="cursor: pointer;">
+            Model Overview <small class="text-muted ms-2" style="font-size: 0.7em;">&#9660;</small>
+          </h5>
+          <div class="collapse" id="bsOverviewCollapse">
+            <div class="pt-3">
+              <h6>Notation</h6>
+              <p>
+                \( S \) — spot price of the underlying asset.<br>
+                \( K \) — strike price of the option.<br>
+                \( T \) — time to expiry in years.<br>
+                \( r \) — continuously compounded risk-free interest rate.<br>
+                \( \sigma \) — annualized volatility of the underlying's log returns.<br>
+                \( N(\cdot) \) — cumulative distribution function of the standard normal distribution.
+              </p>
+
+              <h6>Call and Put Prices</h6>
+              <p>The Black-Scholes model gives closed-form prices for European options:</p>
+              <div class="math-block">
+                \[
+                  C = S\,N(d_1) - K\,e^{-rT}\,N(d_2)
+                \]
+              </div>
+              <div class="math-block">
+                \[
+                  P = K\,e^{-rT}\,N(-d_2) - S\,N(-d_1)
+                \]
+              </div>
+              <p>where</p>
+              <div class="math-block">
+                \[
+                  d_1 = \frac{\ln(S/K) + \left(r + \tfrac{\sigma^2}{2}\right)T}{\sigma\sqrt{T}}, \qquad
+                  d_2 = d_1 - \sigma\sqrt{T}
+                \]
+              </div>
+
+              <h6>Key Assumptions</h6>
+              <p>The underlying asset follows geometric Brownian motion with log-normal price dynamics.</p>
+              <p>Volatility \( \sigma \) is constant over the life of the option.</p>
+              <p>The underlying pays no dividends during the option's life.</p>
+              <p>Trading is continuous and frictionless (no transaction costs or market impact).</p>
+              <p>The option can only be exercised at expiry (European exercise only).</p>
+
+              <h6>Put-Call Parity</h6>
+              <div class="math-block">
+                \[
+                  C - P = S - K\,e^{-rT}
+                \]
+              </div>
+              <p>
+                Put-call parity links the prices of a European call and put with the same strike
+                and expiry. Given any three of \( C \), \( P \), \( S \), and \( K\,e^{-rT} \),
+                the fourth is determined. A violation of this relationship implies an arbitrage
+                opportunity (absent transaction costs).
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <form method="post" class="row gy-2 gx-3 align-items-end mb-4 app-form">
     <div class="col-md-4">
-      <label class="form-label" for="underlying_price">Underlying Price</label>
+      <label class="form-label" for="underlying_price">Underlying Price <span class="info-tip" data-tooltip="Current market price of the underlying asset." tabindex="0">?</span></label>
       <input class="form-control" id="underlying_price" name="underlying_price" type="number" step="0.01" value="{{ form_values.underlying_price }}" required>
     </div>
     <div class="col-md-4">
-      <label class="form-label" for="strike_price">Strike Price</label>
+      <label class="form-label" for="strike_price">Strike Price <span class="info-tip" data-tooltip="The exercise price specified in the option contract." tabindex="0">?</span></label>
       <input class="form-control" id="strike_price" name="strike_price" type="number" step="0.01" value="{{ form_values.strike_price }}" required>
     </div>
     <div class="col-md-4">
-      <label class="form-label" for="time_to_expiry">Time to Expiry (years)</label>
+      <label class="form-label" for="time_to_expiry">Time to Expiry (years) <span class="info-tip" data-tooltip="Years until the option expires. Use decimals for partial years (e.g. 0.25 = 3 months)." tabindex="0">?</span></label>
       <input class="form-control" id="time_to_expiry" name="time_to_expiry" type="number" step="0.01" value="{{ form_values.time_to_expiry }}" required>
     </div>
     <div class="col-md-4">
-      <label class="form-label" for="risk_free_rate">Risk-Free Rate (%)</label>
+      <label class="form-label" for="risk_free_rate">Risk-Free Rate (%) <span class="info-tip" data-tooltip="Annualized continuously compounded rate, typically a Treasury yield matching the expiry horizon." tabindex="0">?</span></label>
       <input class="form-control" id="risk_free_rate" name="risk_free_rate" type="number" step="0.01" value="{{ form_values.risk_free_rate }}" required>
     </div>
     <div class="col-md-4">
-      <label class="form-label" for="volatility">Volatility (%)</label>
+      <label class="form-label" for="volatility">Volatility (%) <span class="info-tip" data-tooltip="Annualized standard deviation of log returns. Use historical or implied vol." tabindex="0">?</span></label>
       <input class="form-control" id="volatility" name="volatility" type="number" step="0.01" value="{{ form_values.volatility }}" required>
     </div>
     <div class="col-md-4">
-      <label class="form-label" for="option_type">Option Type</label>
+      <label class="form-label" for="option_type">Option Type <span class="info-tip" data-tooltip="European call (right to buy) or put (right to sell) at expiry." tabindex="0">?</span></label>
       <select class="form-select" id="option_type" name="option_type">
         <option value="call" {% if form_values.option_type == 'call' %}selected{% endif %}>Call</option>
         <option value="put" {% if form_values.option_type == 'put' %}selected{% endif %}>Put</option>

@@ -22,7 +22,8 @@ website/
       universe/          # Investment Universe (/universe)
       options/           # Black-Scholes pricing (/options)
       style/             # Benchmark Style analysis (/style)
-      factor/            # Factor Risk Model (/factor)
+      risk/              # Risk Model (/risk)
+      regime/            # Regime Signals (/regime)
     services/            # Background services (universe cache)
     static/              # CSS (styles.css)
     templates/           # Jinja2 HTML templates
@@ -51,18 +52,27 @@ The visual design is inspired by BNY's (Bank of New York) 2024 rebrand and their
 
 ### Color palette (BNY-inspired, not an exact copy)
 
-| Role             | Token                | Hex       | Usage                                      |
-|------------------|----------------------|-----------|---------------------------------------------|
-| Primary teal     | `--color-primary`    | `#00857C` | Buttons, links, accent arrow, active states |
-| Primary dark     | `--color-primary-dk` | `#006B64` | Hover states, active nav                    |
-| Navy             | `--color-navy`       | `#1C2B3A` | Nav bar, dark panels, footer                |
-| Navy deep        | `--color-navy-deep`  | `#0F1924` | Body background, hero sections              |
-| Charcoal         | `--color-charcoal`   | `#2A2A2A` | Primary text on light backgrounds           |
-| Warm gray        | `--color-gray`       | `#A7A5A6` | Secondary text, borders, muted elements     |
-| Light gray       | `--color-gray-lt`    | `#F0EFED` | Card backgrounds, section separators        |
-| Off-white        | `--color-off-white`  | `#FAF9F7` | Page background on light sections           |
-| White            | `--color-white`      | `#FFFFFF` | Card surfaces, input backgrounds            |
-| Gold accent      | `--color-gold`       | `#B07E25` | Subtle accents, kickers, tags               |
+| Role             | CSS Variable           | Hex       | Usage                                      |
+|------------------|------------------------|-----------|---------------------------------------------|
+| Navy deep        | `--ink-900`            | `#00233c` | Primary text, headings, dark accents        |
+| Navy             | `--ink-800`            | `#001f38` | Font color, axis labels                     |
+| Teal dark        | `--teal-700`           | `#00475e` | Deep teal accents                           |
+| Teal hover       | `--teal-600`           | `#45999a` | Button/link hover states                    |
+| Teal primary     | `--teal-500`           | `#2c9bac` | Buttons, links, active states, section numbers |
+| Teal light       | `--teal-400`           | `#6abcc5` | Charts, secondary accents                   |
+| Teal muted       | `--teal-300`           | `#73afb0` | Panel kickers on dark backgrounds           |
+| White            | `--paper`              | `#ffffff` | Card surfaces, input backgrounds            |
+| Surface          | `--surface`            | `#eaeaea` | Card backgrounds                            |
+| Surface alt      | `--surface-2`          | `#f4f4f5` | Form backgrounds, hero cards                |
+| Border           | `--border`             | `#d8dadb` | Card borders, dividers, grid lines          |
+| Muted            | `--muted`              | `#667d89` | Secondary text, kickers, labels             |
+| Support          | `--support`            | `#285064` | Body paragraph text                         |
+| Accent           | `--accent`             | `#f86018` | Sparingly, call-to-action highlights        |
+
+**Chart-specific tokens** (defined in `QD_THEME` JS object in `base.html`):
+- Forecast/Predicted: `#e63946` (red)
+- Realized/Trailing: `#457b9d` (slate blue)
+- Confidence bands: `#a8dadc` (light teal)
 
 ### Typography
 
@@ -100,8 +110,10 @@ Source+Sans+3:wght@400;500;600
 ### HTML / Templates
 - Jinja2 extends `base.html` for all pages
 - Bootstrap 5 grid for layout
-- Section numbering pattern: `<span class="section-number">01</span>`
+- Section numbering: 01 (homepage hero), 02 (Investment Universe / homepage modules), 03 (Black-Scholes), 04 (Benchmark Style), 05 (Regime Signals), 06 (Risk Model)
 - Card-based content modules
+- Each module page has a collapsible "Model Overview" section (`.model-description` class, Bootstrap collapse, MathJax formulas)
+- Form labels include `.info-tip` tooltips for user guidance
 
 ### CSS
 - Single `styles.css` file (no preprocessor)
@@ -113,6 +125,8 @@ Source+Sans+3:wght@400;500;600
 - Inline `<script>` blocks in templates (no build step)
 - Plotly.js for all charts
 - AJAX calls via `fetch()` for lazy-loaded data (factor analysis)
+- **Plotly theme**: `base.html` defines `QD_THEME` (color constants), `QD_PLOTLY_BASE` (shared layout), and `QD_PLOTLY_CONFIG` (toolbar config). Templates use `structuredClone(QD_PLOTLY_BASE)` and override only chart-specific properties. Do not duplicate the full layout object in individual templates.
+- **Tooltips**: CSS-only via `.info-tip` class with `data-tooltip` attribute. No JS required.
 
 ## Deployment
 
