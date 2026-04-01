@@ -7,6 +7,7 @@
       <p class="section-kicker">Risk lab</p>
       <h2 class="section-title">Risk Model</h2>
       <p class="section-lede">Estimate a PCA-based covariance model with GARCH conditional variance and backtest it out of sample.</p>
+      <p class="section-note">Portfolio construction desks use factor risk models to generate covariance matrices for mean-variance optimization. Time-varying betas and GARCH volatility capture the non-stationarity that static models miss. The covariance matrix feeds asset allocation; the factor decomposition reveals which risks are diversifiable.</p>
       <p class="section-note">LassoCV selects factor exposures, PCA rotates into principal components, and GARCH(1,1) forecasts time-varying variance.</p>
     </div>
     <div class="section-rule"></div>
@@ -83,7 +84,7 @@
           <form method="post" action="{{ url_for('risk.risk_model') }}" class="app-form">
             <div class="row g-3">
             <div class="col-12 col-md-6 col-lg-4">
-              <label class="form-label" for="universe">Industry Universe</label>
+              <label class="form-label" for="universe">Industry Universe <span class="info-tip" data-tooltip="Number of industry groups. Higher granularity gives narrower sectors but thinner portfolios." tabindex="0">?</span></label>
               <select class="form-select" id="universe" name="universe">
                 {% for u in universes %}
                   <option value="{{ u }}" {% if u|string == selected_universe %}selected{% endif %}>{{ u }} Industries</option>
@@ -92,7 +93,7 @@
               <p class="form-text">Choose the industry granularity.</p>
             </div>
             <div class="col-12 col-md-6 col-lg-4">
-              <label class="form-label" for="factor_set">Factor Set</label>
+              <label class="form-label" for="factor_set">Factor Set <span class="info-tip" data-tooltip="Fama-French factor model variant. FF3 = Market, SMB, HML. FF5 adds RMW + CMA. +Mom adds momentum." tabindex="0">?</span></label>
               <select class="form-select" id="factor_set" name="factor_set">
                 <option value="ff3" {% if factor_set == 'ff3' %}selected{% endif %}>FF 3-Factor</option>
                 <option value="ff5" {% if factor_set == 'ff5' %}selected{% endif %}>FF 5-Factor</option>
@@ -102,7 +103,7 @@
               <p class="form-text">Fama-French factor model variant.</p>
             </div>
             <div class="col-12 col-md-6 col-lg-4">
-              <label class="form-label" for="garch_dist">GARCH Distribution</label>
+              <label class="form-label" for="garch_dist">GARCH Distribution <span class="info-tip" data-tooltip="Innovation distribution for GARCH(1,1). Normal assumes Gaussian; t allows fat tails; skewt adds asymmetry." tabindex="0">?</span></label>
               <select class="form-select" id="garch_dist" name="garch_dist">
                 <option value="normal" {% if garch_dist == 'normal' %}selected{% endif %}>Normal</option>
                 <option value="t" {% if garch_dist == 't' %}selected{% endif %}>Student-t</option>
@@ -111,28 +112,28 @@
               <p class="form-text">Innovation distribution for GARCH(1,1).</p>
             </div>
             <div class="col-12 col-md-6 col-lg-4">
-              <label class="form-label" for="train_fraction">Train Fraction</label>
+              <label class="form-label" for="train_fraction">Train Fraction <span class="info-tip" data-tooltip="Proportion of sample used for in-sample training. The remainder is held out for backtesting." tabindex="0">?</span></label>
               <input class="form-control" id="train_fraction" name="train_fraction" type="number" min="0.1" max="0.9" step="0.05" value="{{ train_fraction_value }}">
               <p class="form-text">Proportion of data used for in-sample training.</p>
             </div>
             <div class="col-12 col-md-6 col-lg-4">
-              <label class="form-label" for="realized_window">Realized Window</label>
+              <label class="form-label" for="realized_window">Realized Window <span class="info-tip" data-tooltip="Rolling window (in days) for computing trailing realized volatility as a benchmark for forecast evaluation." tabindex="0">?</span></label>
               <input class="form-control" id="realized_window" name="realized_window" type="number" min="5" max="252" step="1" value="{{ realized_window_value }}">
               <p class="form-text">Rolling window for trailing realized vol benchmark.</p>
             </div>
             <div class="col-12 col-md-6 col-lg-4">
-              <label class="form-label" for="start_year">Start Year</label>
+              <label class="form-label" for="start_year">Start Year <span class="info-tip" data-tooltip="First year of data to include. Defaults to earliest available." tabindex="0">?</span></label>
               <input class="form-control" id="start_year" name="start_year" type="number" inputmode="numeric" pattern="\d{4}" min="{{ earliest_start_year }}" max="{{ current_year }}" step="1" placeholder="YYYY" value="{{ start_year_value }}">
               <p class="form-text">Defaults to the earliest available data.</p>
             </div>
             <div class="col-12 col-md-6 col-lg-4">
-              <label class="form-label" for="tstat_cutoff">T-Stat Cutoff</label>
+              <label class="form-label" for="tstat_cutoff">T-Stat Cutoff <span class="info-tip" data-tooltip="Minimum absolute t-statistic for a factor loading to be retained. Higher values produce sparser models." tabindex="0">?</span></label>
               <input type="number" class="form-control" id="tstat_cutoff" name="tstat_cutoff"
                      value="{{ tstat_cutoff|default(4.0) }}" step="0.5" min="0" max="10">
               <p class="form-text">Minimum t-statistic for factor retention.</p>
             </div>
             <div class="col-12 col-md-6 col-lg-4">
-              <label class="form-label" for="kalman_q_scale">Kalman Smoothness</label>
+              <label class="form-label" for="kalman_q_scale">Kalman Smoothness <span class="info-tip" data-tooltip="Controls Kalman filter responsiveness for time-varying betas. Lower = smoother, higher = more reactive." tabindex="0">?</span></label>
               <input type="number" class="form-control" id="kalman_q_scale" name="kalman_q_scale"
                      value="{{ kalman_q_scale|default(0.01) }}" step="0.01" min="0.01" max="10.0">
               <p class="form-text">Lower = smoother betas, higher = more reactive. Default 0.01.</p>
@@ -354,6 +355,7 @@
               </div>
               <p class="card-subtitle text-muted small mb-3" id="factorRiskDesc"></p>
               <div id="factorRiskChart" class="chart-container"></div>
+              <p class="chart-source">Source: Kenneth R. French Data Library (industry portfolios and factors).</p>
             </div>
           </div>
         </div>
@@ -409,6 +411,7 @@
               </div>
               <p class="card-subtitle text-muted small mb-3" id="backtestDesc"></p>
               <div id="backtestChart" class="chart-container"></div>
+              <p class="chart-source">Source: Kenneth R. French Data Library (industry portfolios and factors).</p>
             </div>
           </div>
         </div>
@@ -451,72 +454,26 @@
       }
 
       /* ---- Shared layout ---- */
-      const baseLayout = {
-        margin: { t: 40, r: 20, b: 60, l: 60 },
-        font: {
-          family: 'Source Sans 3, Segoe UI, Tahoma, sans-serif',
-          color: '#001f38',
-        },
-        paper_bgcolor: 'rgba(0, 0, 0, 0)',
-        plot_bgcolor: '#ffffff',
-        xaxis: {
-          tickformat: "%b %Y",
-          automargin: true,
-          showline: true,
-          linecolor: '#d8dadb',
-          linewidth: 1,
-          gridcolor: 'rgba(216, 218, 219, 0.4)',
-          tickfont: { color: '#667d89' },
-          titlefont: { color: '#001f38' },
-          zeroline: false,
-          title: '',
-        },
-        yaxis: {
-          automargin: true,
-          showline: true,
-          linecolor: '#d8dadb',
-          linewidth: 1,
-          gridcolor: 'rgba(216, 218, 219, 0.4)',
-          tickfont: { color: '#667d89' },
-          titlefont: { color: '#001f38' },
-          zeroline: false,
-        },
-        legend: {
-          x: 0.01, y: 0.99,
-          xanchor: 'left', yanchor: 'top',
-          bgcolor: 'rgba(0, 0, 0, 0)',
-          border: 'None'
-        },
-        showlegend: true,
-        hovermode: 'closest',
-        hoverlabel: { font: { color: '#001f38' } },
-      };
+      const baseLayout = structuredClone(QD_PLOTLY_BASE);
+      baseLayout.xaxis.tickformat = '%b %Y';
+      baseLayout.xaxis.title = '';
+      baseLayout.showlegend = true;
 
-      const plotCfg = { displaylogo: false, responsive: true };
+      const plotCfg = QD_PLOTLY_CONFIG;
 
       /* ---- Colors ---- */
       const COL = {
-        forecast: '#e63946',
-        realized: '#457b9d',
-        ret:      '#001f38',
-        conf:     '#a8dadc',
+        forecast: QD_THEME.forecast,
+        realized: QD_THEME.realized,
+        ret:      QD_THEME.ink800,
+        conf:     QD_THEME.conf,
         identity: '#6c757d',
       };
 
-      const FACTOR_COLORS = [
-        '#e63946', '#457b9d', '#2c9bac', '#f86018',
-        '#001f38', '#6abcc5', '#285064', '#73afb0',
-        '#45999a', '#667d89',
-      ];
+      const FACTOR_COLORS = QD_THEME.factorColors;
 
       /* ---- Custom heatmap colorscale (Navy -> White -> Teal) ---- */
-      const HEATMAP_SCALE = [
-        [0,    '#001f38'],
-        [0.25, '#285064'],
-        [0.5,  '#ffffff'],
-        [0.75, '#6abcc5'],
-        [1,    '#2c9bac'],
-      ];
+      const HEATMAP_SCALE = QD_THEME.heatmapScale;
 
       const heatmapLayout = {
         ...baseLayout,

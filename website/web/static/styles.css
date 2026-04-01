@@ -13,6 +13,10 @@
   --muted: #667d89;
   --support: #285064;
   --accent: #f86018;
+  --navy-text-muted: #e5edf3;
+  --teal-focus: rgba(44, 155, 172, 0.2);
+  --white-30: rgba(255, 255, 255, 0.3);
+  --white-08: rgba(255, 255, 255, 0.08);
   --shadow-soft: 0 10px 22px rgba(0, 35, 60, 0.08);
   --shadow-subtle: 0 6px 14px rgba(0, 35, 60, 0.06);
   --radius-lg: 18px;
@@ -102,14 +106,14 @@ a:hover {
 
 .disclaimer-banner {
   background: var(--ink-900);
-  color: #ffffff;
+  color: var(--paper);
   font-size: 0.82rem;
 }
 
 .disclaimer-text {
   margin: 0;
   padding: 0.6rem 0;
-  color: #ffffff;
+  color: var(--paper);
 }
 
 .app-nav {
@@ -302,7 +306,7 @@ a:hover {
 
 .panel-navy {
   background: var(--ink-900);
-  color: #ffffff;
+  color: var(--paper);
   border-radius: var(--radius-lg);
   padding: 1.8rem;
   box-shadow: var(--shadow-soft);
@@ -310,7 +314,7 @@ a:hover {
 }
 
 .panel-navy p {
-  color: #e5edf3;
+  color: var(--navy-text-muted);
 }
 
 .panel-kicker {
@@ -324,7 +328,7 @@ a:hover {
 
 .panel-title {
   margin: 0 0 0.6rem;
-  color: #ffffff;
+  color: var(--paper);
 }
 
 .panel-body {
@@ -342,13 +346,13 @@ a:hover {
   align-items: center;
   padding: 0.25rem 0.7rem;
   border-radius: var(--radius-pill);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--white-30);
+  background: var(--white-08);
   font-size: 0.7rem;
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #ffffff;
+  color: var(--paper);
 }
 
 .report-card {
@@ -373,7 +377,7 @@ a:hover {
 .bubble-callout {
   margin-top: 1.5rem;
   padding: 1.4rem 2rem;
-  background: #ffffff;
+  background: var(--paper);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   text-align: center;
@@ -394,7 +398,7 @@ a:hover {
 .btn-primary {
   background: var(--teal-500);
   border-color: var(--teal-500);
-  color: #ffffff;
+  color: var(--paper);
 }
 
 .btn-primary:hover,
@@ -412,7 +416,7 @@ a:hover {
 .btn-outline-secondary:hover,
 .btn-outline-secondary:focus {
   background: var(--ink-900);
-  color: #ffffff;
+  color: var(--paper);
 }
 
 .text-link {
@@ -442,14 +446,14 @@ a:hover {
 .form-select {
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
-  background: #ffffff;
+  background: var(--paper);
   color: var(--ink-900);
 }
 
 .form-control:focus,
 .form-select:focus {
   border-color: var(--teal-500);
-  box-shadow: 0 0 0 0.2rem rgba(44, 155, 172, 0.2);
+  box-shadow: 0 0 0 0.2rem var(--teal-focus);
 }
 
 .form-text {
@@ -466,7 +470,7 @@ a:hover {
   min-height: 60vh;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
-  background: #ffffff;
+  background: var(--paper);
 }
 
 .chart-container--tall {
@@ -516,7 +520,7 @@ a:hover {
 .alert {
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
-  background: #ffffff;
+  background: var(--paper);
   color: var(--ink-800);
 }
 
@@ -672,7 +676,7 @@ a:hover {
 .backtest-controls select {
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
-  background: #ffffff;
+  background: var(--paper);
   color: var(--ink-900);
   font-size: 0.85rem;
   padding: 0.3rem 0.6rem;
@@ -680,7 +684,7 @@ a:hover {
 
 .backtest-controls select:focus {
   border-color: var(--teal-500);
-  box-shadow: 0 0 0 0.2rem rgba(44, 155, 172, 0.2);
+  box-shadow: 0 0 0 0.2rem var(--teal-focus);
   outline: none;
 }
 
@@ -693,4 +697,79 @@ a:hover {
   .backtest-control-group {
     justify-content: space-between;
   }
+}
+
+/* ---- Tooltip ---- */
+.info-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1em;
+  height: 1.1em;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: help;
+  vertical-align: middle;
+  margin-left: 0.3em;
+}
+
+.info-tip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink-900);
+  color: var(--paper);
+  font-size: 0.78rem;
+  font-weight: 400;
+  font-family: var(--font-body);
+  line-height: 1.5;
+  padding: 0.6rem 0.9rem;
+  border-radius: var(--radius-md);
+  white-space: normal;
+  width: max-content;
+  max-width: 280px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 20;
+}
+
+.info-tip:hover::after,
+.info-tip:focus::after {
+  opacity: 1;
+}
+
+/* ---- Chart source citation ---- */
+.chart-source {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 0.5rem;
+  font-style: italic;
+}
+
+/* ---- Bio headshot ---- */
+.bio-headshot {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* ---- Coming soon cards ---- */
+.report-card--coming-soon {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.report-card--coming-soon .card-kicker {
+  color: var(--accent);
 }

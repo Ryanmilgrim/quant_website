@@ -2,7 +2,7 @@
 
 {% block content %}
   <section class="section-header">
-    <span class="section-number">07</span>
+    <span class="section-number">06</span>
     <div class="section-text">
       <p class="section-kicker">Risk lab</p>
       <h2 class="section-title">Saved Risk Model Runs</h2>
@@ -252,6 +252,7 @@
               </div>
               <p class="card-subtitle text-muted small mb-3" id="factorRiskDesc"></p>
               <div id="factorRiskChart" class="chart-container"></div>
+              <p class="chart-source">Source: Kenneth R. French Data Library (industry portfolios and factors).</p>
             </div>
           </div>
         </div>
@@ -305,6 +306,7 @@
               </div>
               <p class="card-subtitle text-muted small mb-3" id="backtestDesc"></p>
               <div id="backtestChart" class="chart-container"></div>
+              <p class="chart-source">Source: Kenneth R. French Data Library (industry portfolios and factors).</p>
             </div>
           </div>
         </div>
@@ -342,31 +344,15 @@
         return _fetchCache[cacheKey];
       }
 
-      const baseLayout = {
-        margin: { t: 40, r: 20, b: 60, l: 60 },
-        font: { family: 'Source Sans 3, Segoe UI, Tahoma, sans-serif', color: '#001f38' },
-        paper_bgcolor: 'rgba(0, 0, 0, 0)',
-        plot_bgcolor: '#ffffff',
-        xaxis: {
-          tickformat: "%b %Y", automargin: true, showline: true,
-          linecolor: '#d8dadb', linewidth: 1, gridcolor: 'rgba(216, 218, 219, 0.4)',
-          tickfont: { color: '#667d89' }, titlefont: { color: '#001f38' },
-          zeroline: false, title: '',
-        },
-        yaxis: {
-          automargin: true, showline: true,
-          linecolor: '#d8dadb', linewidth: 1, gridcolor: 'rgba(216, 218, 219, 0.4)',
-          tickfont: { color: '#667d89' }, titlefont: { color: '#001f38' },
-          zeroline: false,
-        },
-        legend: { x: 0.01, y: 0.99, xanchor: 'left', yanchor: 'top', bgcolor: 'rgba(0, 0, 0, 0)', border: 'None' },
-        showlegend: true, hovermode: 'closest',
-        hoverlabel: { font: { color: '#001f38' } },
-      };
-      const plotCfg = { displaylogo: false, responsive: true };
-      const COL = { forecast: '#e63946', realized: '#457b9d', ret: '#001f38', conf: '#a8dadc', identity: '#6c757d' };
-      const FACTOR_COLORS = ['#e63946', '#457b9d', '#2c9bac', '#f86018', '#001f38', '#6abcc5', '#285064', '#73afb0', '#45999a', '#667d89'];
-      const HEATMAP_SCALE = [[0,'#001f38'],[0.25,'#285064'],[0.5,'#ffffff'],[0.75,'#6abcc5'],[1,'#2c9bac']];
+      const baseLayout = structuredClone(QD_PLOTLY_BASE);
+      baseLayout.xaxis.tickformat = '%b %Y';
+      baseLayout.xaxis.title = '';
+      baseLayout.showlegend = true;
+
+      const plotCfg = QD_PLOTLY_CONFIG;
+      const COL = { forecast: QD_THEME.forecast, realized: QD_THEME.realized, ret: QD_THEME.ink800, conf: QD_THEME.conf, identity: '#6c757d' };
+      const FACTOR_COLORS = QD_THEME.factorColors;
+      const HEATMAP_SCALE = QD_THEME.heatmapScale;
       const heatmapLayout = {
         ...baseLayout,
         margin: { t: 30, r: 50, b: 100, l: 150 },
@@ -478,7 +464,7 @@
               colorscale: HEATMAP_SCALE, zmin: betaHeatmap.zmin, zmax: betaHeatmap.zmax,
               colorbar: { title: 'Beta', titlefont: { size: 12 } },
               hovertemplate: '<b>%{y}</b> &times; %{x}<br>Beta: %{z:.3f}<extra></extra>',
-              texttemplate: '%{z:.2f}', textfont: { size: 10, color: '#001f38' },
+              texttemplate: '%{z:.2f}', textfont: { size: 10, color: QD_THEME.ink800 },
             }], {
               ...heatmapLayout,
               xaxis: { ...heatmapLayout.xaxis, tickangle: -45 },

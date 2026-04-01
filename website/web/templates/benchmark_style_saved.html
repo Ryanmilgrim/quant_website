@@ -2,7 +2,7 @@
 
 {% block content %}
   <section class="section-header">
-    <span class="section-number">05</span>
+    <span class="section-number">04</span>
     <div class="section-text">
       <p class="section-kicker">Style lab</p>
       <h2 class="section-title">Saved Benchmark Style Runs</h2>
@@ -310,39 +310,23 @@
 
   {% if chart_growth or chart_tracking or (weights_history and weights_history.series) %}
     <section class="report-grid report-grid--spaced">
-      {% if chart_growth %}
-        <div class="span-12">
-          <div class="card chart-panel">
-            <div class="card-body p-4 p-lg-5">
-              <h5 class="card-title">Simulated portfolio vs market benchmark</h5>
-              <p class="card-subtitle text-muted small mb-3">Simulated performance from the rolling style weights compared with the market benchmark.</p>
-              <div id="growthChart" class="chart-container"></div>
+      <div class="span-12">
+        <div class="card chart-panel">
+          <div class="card-body p-4 p-lg-5">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h5 class="card-title mb-0" id="chartTitle">Historical style weights</h5>
+              <select class="form-select form-select-sm w-auto" id="chartMode">
+                <option value="weights" selected>Historical Style Weights</option>
+                <option value="growth">Simulated Portfolio vs Benchmark</option>
+                <option value="tracking">Residual Return</option>
+              </select>
             </div>
+            <p class="card-subtitle text-muted small mb-3" id="chartDescription"></p>
+            <div id="mainChart" class="chart-container"></div>
+            <p class="chart-source">Source: Kenneth R. French Data Library. Simulated portfolio; not investment advice.</p>
           </div>
         </div>
-      {% endif %}
-      {% if chart_tracking %}
-        <div class="span-12">
-          <div class="card chart-panel">
-            <div class="card-body p-4 p-lg-5">
-              <h5 class="card-title">Residual return (portfolio &minus; benchmark)</h5>
-              <p class="card-subtitle text-muted small mb-3">Residuals from the tracking fit; dashed lines show mean &plusmn; 3 SD (daily).</p>
-              <div id="trackingChart" class="chart-container"></div>
-            </div>
-          </div>
-        </div>
-      {% endif %}
-      {% if weights_history and weights_history.series %}
-        <div class="span-12">
-          <div class="card chart-panel">
-            <div class="card-body p-4 p-lg-5">
-              <h5 class="card-title">Historical style weights</h5>
-              <p class="card-subtitle text-muted small mb-3">Stacked area view of the rolling allocations.</p>
-              <div id="weightsHistoryChart" class="chart-container"></div>
-            </div>
-          </div>
-        </div>
-      {% endif %}
+      </div>
     </section>
   {% endif %}
 
@@ -378,170 +362,97 @@
       const trackingChart = {{ chart_tracking | tojson }};
       const weightsHistory = {{ weights_history | tojson }};
 
-      const baseLayout = {
-        margin: { t: 40, r: 20, b: 60, l: 60 },
-        font: {
-          family: 'Source Sans 3, Segoe UI, Tahoma, sans-serif',
-          color: '#001f38',
+      const baseLayout = structuredClone(QD_PLOTLY_BASE);
+      baseLayout.showlegend = true;
+      baseLayout.xaxis.title = '';
+
+      const CHART_DEFS = {
+        weights: {
+          title: 'Historical style weights',
+          desc: 'Rolling industry allocations from the constrained optimizer. Each band shows the weight assigned to an industry at each rebalance date. Rapid shifts indicate regime sensitivity; stable bands suggest a persistent style tilt.',
         },
-        paper_bgcolor: 'rgba(0, 0, 0, 0)',
-        plot_bgcolor: '#ffffff',
-        xaxis: {
-          tickformat: "'%y",
-          automargin: true,
-          showline: true,
-          linecolor: '#d8dadb',
-          linewidth: 1,
-          gridcolor: 'rgba(216, 218, 219, 0.4)',
-          tickfont: { color: '#667d89' },
-          titlefont: { color: '#001f38' },
-          zeroline: false,
-          title: '',
+        growth: {
+          title: 'Simulated portfolio vs market benchmark',
+          desc: 'Cumulative indexed growth of the style-replicated portfolio against the market benchmark. The tracking portfolio is long-only with weights summing to 100%. Divergence indicates tracking error accumulation over time.',
         },
-        yaxis: {
-          automargin: true,
-          showline: true,
-          linecolor: '#d8dadb',
-          linewidth: 1,
-          gridcolor: 'rgba(216, 218, 219, 0.4)',
-          tickfont: { color: '#667d89' },
-          titlefont: { color: '#001f38' },
-          zeroline: false,
-        },
-        legend: {
-          x: 0.01,
-          y: 0.99,
-          xanchor: 'left',
-          yanchor: 'top',
-          bgcolor: 'rgba(0, 0, 0, 0)',
-          border: 'None'
-        },
-        showlegend: true,
-        hovermode: 'closest',
-        hoverlabel: {
-          font: { color: '#001f38' }
+        tracking: {
+          title: 'Residual return (portfolio \u2212 benchmark)',
+          desc: 'Daily difference between the simulated portfolio and the benchmark. Dashed lines mark \u00b13 standard deviations of the residual. Exceedances flag periods where the style mix drifted from the benchmark.',
         },
       };
 
-      if (growthChart && growthChart.series && growthChart.series.length) {
-        const traces = growthChart.series.map((series) => {
-          const isBenchmark = series.name === 'Market Benchmark';
+      function renderGrowth(container) {
+        if (!growthChart || !growthChart.series || !growthChart.series.length) return;
+        const traces = growthChart.series.map((s) => {
+          const isBenchmark = s.name === 'Market Benchmark';
           return {
-            type: 'scatter',
-            mode: 'lines',
-            name: series.name,
-            x: series.x,
-            y: series.y,
-            line: {
-              color: isBenchmark ? '#2c9bac' : '#001f38',
-              width: isBenchmark ? 2.5 : 2,
-            },
-            hoverinfo: 'name+x+y',
+            type: 'scatter', mode: 'lines', name: s.name, x: s.x, y: s.y,
+            line: { color: isBenchmark ? QD_THEME.teal500 : QD_THEME.ink800, width: isBenchmark ? 2.5 : 2 },
             hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:,.2f}<extra></extra>',
           };
         });
-
-        const layout = {
-          ...baseLayout,
-          yaxis: {
-            ...baseLayout.yaxis,
-            title: growthChart.y_axis_title || 'Indexed growth',
-          },
-        };
-
-        const container = document.getElementById('growthChart');
-        Plotly.purge(container);
-        Plotly.newPlot(container, traces, layout, { displaylogo: false, responsive: true });
+        const layout = { ...baseLayout, yaxis: { ...baseLayout.yaxis, title: growthChart.y_axis_title || 'Indexed growth' } };
+        Plotly.newPlot(container, traces, layout, QD_PLOTLY_CONFIG);
       }
 
-      if (trackingChart && trackingChart.series && trackingChart.series.length) {
-        const series = trackingChart.series[0];
+      function renderTracking(container) {
+        if (!trackingChart || !trackingChart.series || !trackingChart.series.length) return;
+        const s = trackingChart.series[0];
         const traces = [];
-
         if (trackingChart.control_limits) {
           const upper = trackingChart.control_limits.upper;
           const lower = trackingChart.control_limits.lower;
-
           traces.push(
-            {
-              type: 'scatter',
-              mode: 'lines',
-              name: '+/- 3 SD',
-              x: series.x,
-              y: series.x.map(() => upper),
-              line: { color: '#ff7a00', width: 2.4, dash: 'dash' },
-              hoverinfo: 'skip',
-              legendrank: 2,
-            },
-            {
-              type: 'scatter',
-              mode: 'lines',
-              x: series.x,
-              line: { color: '#ff7a00', width: 2.4, dash: 'dash' },
-              hoverinfo: 'skip',
-              y: series.x.map(() => lower),
-              showlegend: false,
-              legendrank: 3,
-            },
+            { type: 'scatter', mode: 'lines', name: '+/- 3 SD', x: s.x,
+              y: s.y.map(() => upper), line: { color: QD_THEME.accent, width: 2.4, dash: 'dash' },
+              hoverinfo: 'skip', legendrank: 2 },
+            { type: 'scatter', mode: 'lines', x: s.x,
+              y: s.y.map(() => lower), line: { color: QD_THEME.accent, width: 2.4, dash: 'dash' },
+              hoverinfo: 'skip', showlegend: false, legendrank: 3 },
           );
         }
-
         traces.push({
-          type: 'scatter',
-          mode: 'lines',
-          name: series.name,
-          x: series.x,
-          y: series.y,
-          line: { color: '#001f38', width: 1.8 },
-          hoverinfo: 'name+x+y',
+          type: 'scatter', mode: 'lines', name: s.name, x: s.x, y: s.y,
+          line: { color: QD_THEME.ink800, width: 1.8 },
           hovertemplate: '<b>Residual return</b><br>%{x|%m/%d/%y}<br>%{y:.1f}%<extra></extra>',
           legendrank: 1,
         });
-
-        const layout = {
-          ...baseLayout,
-          yaxis: {
-            ...baseLayout.yaxis,
-            title: trackingChart.y_axis_title || 'Daily return',
-            tickformat: '.1f',
-            ticksuffix: '%',
-          },
-        };
-
-        const container = document.getElementById('trackingChart');
-        Plotly.purge(container);
-        Plotly.newPlot(container, traces, layout, { displaylogo: false, responsive: true });
+        const layout = { ...baseLayout, yaxis: { ...baseLayout.yaxis,
+          title: trackingChart.y_axis_title || 'Daily return', tickformat: '.1f', ticksuffix: '%' } };
+        Plotly.newPlot(container, traces, layout, QD_PLOTLY_CONFIG);
       }
 
-      if (weightsHistory && weightsHistory.series && weightsHistory.series.length) {
-        const traces = weightsHistory.series.map((series) => ({
-          type: 'scatter',
-          mode: 'lines',
-          name: series.name,
-          x: series.x,
-          y: series.y,
-          stackgroup: 'one',
-          line: { width: 0.7 },
+      function renderWeights(container) {
+        if (!weightsHistory || !weightsHistory.series || !weightsHistory.series.length) return;
+        const traces = weightsHistory.series.map((s) => ({
+          type: 'scatter', mode: 'lines', name: s.name, x: s.x, y: s.y,
+          stackgroup: 'one', line: { width: 0.7 },
           hovertemplate: '<b>%{fullData.name}</b><br>%{x|%m/%d/%y}<br>%{y:.0f}%<extra></extra>',
           showlegend: false,
         }));
-
-        const layout = {
-          ...baseLayout,
-          yaxis: {
-            ...baseLayout.yaxis,
-            title: weightsHistory.y_axis_title || 'Weight (%)',
-            tickformat: '.0f',
-            ticksuffix: '%',
-            range: [0, 100],
-          },
-          showlegend: false,
-        };
-
-        const container = document.getElementById('weightsHistoryChart');
-        Plotly.purge(container);
-        Plotly.newPlot(container, traces, layout, { displaylogo: false, responsive: true });
+        const layout = { ...baseLayout, yaxis: { ...baseLayout.yaxis,
+          title: weightsHistory.y_axis_title || 'Weight (%)', tickformat: '.0f', ticksuffix: '%', range: [0, 100] },
+          showlegend: false };
+        Plotly.newPlot(container, traces, layout, QD_PLOTLY_CONFIG);
       }
+
+      const chartModeSel = document.getElementById('chartMode');
+      const chartTitleEl = document.getElementById('chartTitle');
+      const chartDescEl = document.getElementById('chartDescription');
+
+      function renderMainChart(mode) {
+        const def = CHART_DEFS[mode];
+        chartTitleEl.textContent = def.title;
+        chartDescEl.textContent = def.desc;
+        const container = document.getElementById('mainChart');
+        Plotly.purge(container);
+        if (mode === 'weights') renderWeights(container);
+        else if (mode === 'growth') renderGrowth(container);
+        else if (mode === 'tracking') renderTracking(container);
+      }
+
+      chartModeSel.onchange = () => renderMainChart(chartModeSel.value);
+      renderMainChart('weights');
     </script>
   {% endif %}
 {% endblock %}

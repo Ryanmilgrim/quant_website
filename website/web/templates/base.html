@@ -22,6 +22,76 @@
       };
     </script>
     <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+    <script>
+      window.QD_THEME = {
+        ink900: '#00233c',
+        ink800: '#001f38',
+        teal700: '#00475e',
+        teal600: '#45999a',
+        teal500: '#2c9bac',
+        teal400: '#6abcc5',
+        teal300: '#73afb0',
+        paper: '#ffffff',
+        surface: '#eaeaea',
+        surface2: '#f4f4f5',
+        border: '#d8dadb',
+        muted: '#667d89',
+        support: '#285064',
+        accent: '#f86018',
+        forecast: '#e63946',
+        realized: '#457b9d',
+        conf: '#a8dadc',
+        gridColor: 'rgba(216, 218, 219, 0.4)',
+        fontFamily: 'Source Sans 3, Segoe UI, Tahoma, sans-serif',
+        heatmapScale: [
+          [0, '#001f38'], [0.25, '#285064'], [0.5, '#ffffff'],
+          [0.75, '#6abcc5'], [1, '#2c9bac']
+        ],
+        factorColors: [
+          '#e63946', '#457b9d', '#2c9bac', '#f86018', '#00233c',
+          '#6abcc5', '#285064', '#73afb0', '#45999a', '#667d89'
+        ],
+        regimeColors: [
+          '#2c9bac', '#e63946', '#457b9d', '#f4a261', '#264653',
+          '#6a994e', '#bc4749', '#a68a64', '#344e41', '#9b2226'
+        ],
+      };
+
+      window.QD_PLOTLY_BASE = {
+        margin: { t: 40, r: 20, b: 60, l: 60 },
+        font: { family: QD_THEME.fontFamily, color: QD_THEME.ink800 },
+        paper_bgcolor: 'rgba(0, 0, 0, 0)',
+        plot_bgcolor: QD_THEME.paper,
+        xaxis: {
+          tickformat: "'%y", automargin: true, showline: true,
+          linecolor: QD_THEME.border, linewidth: 1,
+          gridcolor: QD_THEME.gridColor,
+          tickfont: { color: QD_THEME.muted },
+          titlefont: { color: QD_THEME.ink800 },
+          zeroline: false,
+        },
+        yaxis: {
+          automargin: true, showline: true,
+          linecolor: QD_THEME.border, linewidth: 1,
+          gridcolor: QD_THEME.gridColor,
+          tickfont: { color: QD_THEME.muted },
+          titlefont: { color: QD_THEME.ink800 },
+          zeroline: false,
+        },
+        legend: {
+          x: 0.01, y: 0.99, xanchor: 'left', yanchor: 'top',
+          bgcolor: 'rgba(0,0,0,0)',
+        },
+        hovermode: 'closest',
+        hoverlabel: { font: { color: QD_THEME.ink800 } },
+      };
+
+      window.QD_PLOTLY_CONFIG = {
+        displaylogo: false,
+        responsive: true,
+        modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+      };
+    </script>
   </head>
   <body class="app-body">
     <div class="disclaimer-banner">
@@ -37,10 +107,10 @@
         </a>
         <div class="app-nav-links">
           <a class="nav-link" href="{{ url_for('universe.investment_universe') }}">Investment Universe</a>
-          <a class="nav-link" href="{{ url_for('style.benchmark_style') }}">Benchmark Style</a>
           <a class="nav-link" href="{{ url_for('options.black_scholes_view') }}">Black-Scholes</a>
-          <a class="nav-link" href="{{ url_for('risk.risk_model') }}">Risk Model</a>
+          <a class="nav-link" href="{{ url_for('style.benchmark_style') }}">Benchmark Style</a>
           <a class="nav-link" href="{{ url_for('regime.regime_detection') }}">Regime Signals</a>
+          <a class="nav-link" href="{{ url_for('risk.risk_model') }}">Risk Model</a>
         </div>
       </div>
     </nav>
